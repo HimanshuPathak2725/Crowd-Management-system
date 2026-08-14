@@ -1,851 +1,452 @@
 # 🏁 F1 Stadium Crowd Flow Optimiser
 
-> **Real-time crowd simulation, bottleneck forecasting, and dynamic rerouting for large venues.**
+> **Real-time crowd simulation, bottleneck forecasting, and dynamic rerouting for high-density venues.**
+
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)
+![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-000000?style=for-the-badge&logo=yolo&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Models-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
+![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 An AI-assisted crowd management system designed for stadiums, motorsport venues, festivals, railway stations, and other high-density public events.
 
 The project combines **computer vision**, **crowd-density analysis**, a **venue digital twin**, **capacity-aware crowd simulation**, **bottleneck forecasting**, and **dynamic route optimisation** to help event operators identify dangerous crowd build-ups *before* they become critical and guide people toward safer, less congested paths.
 
+> [!NOTE]
 > **Hackathon Problem Statement:** Crowd Flow Optimiser — *Simulating and rerouting crowds in real time.*
 
 ---
 
 ## 🎯 Problem
 
-Large venues can develop dangerous crowd concentrations around:
+Large venues frequently experience dangerous crowd concentrations around critical choke points:
 
-- Entry and exit gates
-- Narrow walkways and choke points
-- Food/concession areas
-- Junctions
-- Grandstands and spectator zones
-- Emergency exits
+* Entry and exit gates
+* Narrow walkways and corridors
+* Food and concession areas
+* Junctions & intersections
+* Grandstands and spectator zones
+* Emergency exits
 
-Traditional monitoring is mostly reactive: an operator sees that an area is already crowded and then responds.
+Traditional monitoring is inherently **reactive**: an operator observes an area that is already crowded and then responds.
 
-The goal of this project is to move from:
+### Paradigm Shift
 
 ```text
-"Where is the crowd right now?"
+FROM: "Where is the crowd right now?"
+TO:   "Where is the crowd likely to become dangerous, when will it happen, and what should we do NOW?"
 
-to:
-
-"Where is the crowd likely to become dangerous,
-when will it happen, and what should we do now?"
-
+```
 
 ---
 
-💡 What We Build
+## 💡 System Architecture
 
 The system is designed around a closed-loop crowd-management pipeline:
 
-┌───────────────────────┐
-│ CCTV / Video Streams  │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ YOLOv8 Person         │
-│ Detection + Tracking  │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ Crowd / Zone          │
-│ Aggregation           │
-└───────────┬───────────┘
-            │
-            ▼
-┌────────────────────────────────┐
-│       VENUE DIGITAL TWIN       │
-│                                │
-│ Zones + Walkways + Capacities  │
-│ + Crowd Simulation             │
-└───────────────┬────────────────┘
-                │
-        ┌───────┴────────┐
-        ▼                ▼
-┌──────────────┐  ┌───────────────┐
-│ Forecasting  │  │ Bottleneck /  │
-│ T+5/T+10/T+15│  │ Risk Engine   │
-└──────┬───────┘  └───────┬───────┘
-       └──────────┬───────┘
-                  ▼
-        ┌────────────────────┐
-        │ Dynamic Route      │
-        │ Optimisation       │
-        └─────────┬──────────┘
-                  ▼
-      ┌───────────────────────────┐
-      │ Operator Dashboard /      │
-      │ Recommended Rerouting     │
-      └───────────────────────────┘
+```mermaid
+flowchart TD
+    A[📹 CCTV / Video Streams] --> B[🎯 YOLOv8 Person Detection & Tracking]
+    B --> C[📊 Crowd / Zone Aggregation]
+    C --> D[🏟️ VENUE DIGITAL TWIN<br/>Zones + Walkways + Capacities + Simulation]
+    
+    D --> E[🔮 Density Forecasting<br/>T+5 / T+10 / T+15]
+    D --> F[🚨 Bottleneck & Risk Engine]
+    
+    E --> G[🧭 Dynamic Route Optimisation]
+    F --> G
+    
+    G --> H[🖥️ Operator Dashboard & Recommended Rerouting]
 
+    style D fill:#1f2937,stroke:#3b82f6,stroke-width:2px,color:#fff
+    style G fill:#111827,stroke:#10b981,stroke-width:2px,color:#fff
+    style H fill:#374151,stroke:#f59e0b,stroke-width:2px,color:#fff
+
+```
 
 ---
 
-🚀 Current Capabilities
+## 🚀 Current Capabilities
 
-The repository contains two layers.
+The repository consists of two core layers:
 
-1. Existing Computer-Vision Modules
+### 1. Existing Computer-Vision Modules
 
-The original project provides:
+* 👥 **Real-time person detection**
+* 🎯 **YOLOv8-based tracking**
+* 📊 **Crowd counting**
+* 🔥 **Grid-based density mapping**
+* 🚨 **Crowd threshold alerts**
+* 🧭 **Multi-route crowd analysis**
+* 🛣 **Route recommendation**
+* 🔊 **Voice guidance**
+* 📈 **Interactive visualisations**
+* 🧠 **Crowd movement & behaviour analysis**
 
-👥 Real-time person detection
+### 2. GrandPrix Crowd Intelligence Engine
 
-🎯 YOLOv8-based tracking
+The `grandprix/` package adds the predictive and simulation layer:
 
-📊 Crowd counting
-
-🔥 Grid-based density mapping
-
-🚨 Crowd threshold alerts
-
-🧭 Multi-route crowd analysis
-
-🛣 Route recommendation
-
-🔊 Voice guidance
-
-📈 Interactive visualisations
-
-📹 CCTV/video analysis
-
-🧠 Crowd movement / behaviour analysis
-
-
-2. GrandPrix Crowd Intelligence Engine
-
-The new grandprix/ package adds the predictive and simulation layer:
-
-🗺️ Venue graph / digital-twin representation
-
-👥 Capacity-aware crowd simulation
-
-📈 Online density forecasting
-
-🚨 Bottleneck risk classification
-
-🧭 Density-aware A* routing
-
-🔀 Dynamic rerouting
-
-🌐 FastAPI control plane
-
-🧪 Automated tests
-
-🎮 Reproducible simulation demo
-
-
+* 🗺️ **Venue graph / digital-twin representation**
+* 👥 **Capacity-aware crowd simulation**
+* 📈 **Online density forecasting**
+* 🚨 **Bottleneck risk classification**
+* 🧭 **Density-aware A* routing**
+* 🔀 **Dynamic rerouting**
+* 🌐 **FastAPI control plane**
+* 🧪 **Automated test suite**
+* 🎮 **Reproducible simulation demo**
 
 ---
 
-🧠 GrandPrix Engine
+## 🧠 GrandPrix Engine Structure
 
-The core engine lives in:
+The core intelligence engine resides in:
 
+```bash
 grandprix/
 ├── __init__.py
-├── core.py       # Digital twin, simulation, forecasting, routing
-├── api.py        # FastAPI interface
-└── demo.py       # End-to-end simulation demo
+├── core.py         # Digital twin, simulation, forecasting, routing
+├── api.py          # FastAPI control plane & endpoints
+├── forecasting.py  # Trend analysis & predictive models
+└── demo.py         # End-to-end simulation demo
 
-
----
-
-🗺️ Digital Twin
-
-The venue is represented as a graph:
-
-North
-                   │
-             ┌─────┴─────┐
-             │           │
-          Junction W   Junction E
-             │           │
-Gate A ──────┤           ├────── Gate B
-             │           │
-             └─────┬─────┘
-                   │
-                Choke
-                   │
-                 Exit
-
-Each zone/node can carry information such as:
-
-Capacity
-
-Current population
-
-Predicted population
-
-Risk level
-
-
-Walkways/edges carry information such as:
-
-Distance
-
-Capacity
-
-Travel cost
-
-Congestion pressure
-
-
-This allows the physical venue to be represented as a computational model that can be simulated and optimised.
-
+```
 
 ---
 
-🔮 Bottleneck Forecasting
+## 🗺️ Digital Twin Representation
+
+The venue is represented as a spatial network graph where physical spaces are mapped into interconnected nodes and edges:
+
+```mermaid
+graph TD
+    North[North Zone] --- JW[Junction W]
+    North --- JE[Junction E]
+    GateA[Gate A] --- JW
+    GateB[Gate B] --- JE
+    JW --- Choke[Choke Point]
+    JE --- Choke
+    Choke --- Exit[Exit Gate]
+
+    classDef zone fill:#1e293b,stroke:#64748b,color:#fff;
+    classDef choke fill:#7f1d1d,stroke:#ef4444,color:#fff;
+    class JW,JE,North,GateA,GateB,Exit zone;
+    class Choke choke;
+
+```
+
+### Data Specifications
+
+| Component | Attributes Tracked |
+| --- | --- |
+| **Zones / Nodes** | Maximum Capacity, Current Population, Predicted Population, Risk Level |
+| **Walkways / Edges** | Physical Distance, Flow Capacity, Travel Cost, Congestion Pressure |
+
+---
+
+## 🔮 Bottleneck Forecasting
 
 Instead of only reacting to current crowd density, the engine projects future density from recent observations.
 
-The current prototype uses a lightweight and interpretable forecasting approach based on:
+The baseline prototype uses an interpretable forecasting approach:
 
-Exponentially weighted density history
+* **Exponentially weighted density history**
+* **Instantaneous trend detection**
+* **Capacity-aware risk thresholds**
 
-Recent trend
+The forecasting interface is modular, allowing seamless upgrades to machine learning models:
 
-Capacity-aware risk thresholds
-
-
-The forecasting interface is intentionally modular so a stronger learned model can replace the baseline without changing the rest of the system.
-
-Future model candidates include:
-
-XGBoost / LightGBM
-
-Temporal regression
-
-LSTM / GRU
-
-Temporal Transformers
-
-
+* 🌲 **XGBoost / LightGBM**
+* 📈 **Temporal Regression**
+* 🔄 **LSTM / GRU Neural Networks**
+* ⚡ **Temporal Transformers (Hugging Face)**
 
 ---
 
-🚨 Bottleneck Detection
+## 🚨 Bottleneck Risk Classification
 
-Predicted density is converted into operational risk levels:
+Predicted density is continually mapped into four operational risk tiers:
 
-NORMAL
-   ↓
-WARNING
-   ↓
-CRITICAL
-   ↓
-EMERGENCY
+$$\text{NORMAL} \longrightarrow \text{WARNING} \longrightarrow \text{CRITICAL} \longrightarrow \text{EMERGENCY}$$
 
-The system ranks the most problematic zones so operators can focus on the areas that need intervention first.
+The system prioritises and ranks problematic zones for operator triage:
 
-Example:
-
-Zone             Predicted Risk
-────────────────────────────────
-Main Choke       EMERGENCY
-West Junction    CRITICAL
-Gate B           WARNING
-North Corridor   NORMAL
-
+| Zone Name | Current Density | Predicted Risk Level | Action Priority |
+| --- | --- | --- | --- |
+| **Main Choke** | 88% | 🔴 `EMERGENCY` | Immediate Reroute |
+| **West Junction** | 72% | 🟠 `CRITICAL` | Pre-emptive Alert |
+| **Gate B** | 55% | 🟡 `WARNING` | Monitor Inflow |
+| **North Corridor** | 20% | 🟢 `NORMAL` | Clear |
 
 ---
 
-🧭 Dynamic Rerouting
+## 🧭 Dynamic Rerouting Engine
 
-The routing engine does not simply choose the shortest path.
+The routing algorithm calculates optimal paths by balancing distance against real-time and predicted congestion using a cost function:
 
-It considers:
+$$\text{Cost} = \text{Distance} + f(\text{Current Congestion}) + g(\text{Capacity Pressure}) + h(\text{Predicted Density})$$
 
-Travel distance
-       +
-Current congestion
-       +
-Capacity pressure
-       +
-Predicted crowding
+```mermaid
+flowchart TD
+    Dest[🎯 Destination Request] --> Short[Short Route<br/>⚠️ HIGH Congestion]
+    Dest --> Alt[Alternate Route<br/>✅ LOW Congestion]
+    
+    Short --> CostH[Higher Cumulative Cost]
+    Alt --> CostL[Lower Cumulative Cost]
+    
+    CostL --> Rec[⭐ Recommended Route via Signage/App]
 
-Therefore, a slightly longer path can become preferable when the shortest path is heavily congested.
-
-┌─────────────┐
-                 │ Destination │
-                 └──────┬──────┘
-                        │
-              ┌─────────┴─────────┐
-              │                   │
-        Short route          Alternate route
-        HIGH congestion      LOW congestion
-              │                   │
-              ▼                   ▼
-        Higher cost           Lower cost
-                                  │
-                                  ▼
-                         Recommended route
-
+```
 
 ---
 
-🎥 Existing Computer Vision Pipeline
+## 🎥 Computer Vision Pipeline Summary
 
-The repository already contains several CV-oriented modules.
+The repository includes CV components that feed real-world data into the GrandPrix engine:
 
-Crowd Behaviour Analysis
-
-Provides:
-
-Person detection
-
-Tracking
-
-Movement analysis
-
-Speed estimation
-
-Direction analysis
-
-Trajectory visualisation
-
-Crowd-flow monitoring
-
-
-Crowd Alert System
-
-Provides:
-
-Real-time crowd counting
-
-Configurable thresholds
-
-Automatic alerts
-
-Live monitoring
-
-
-Crowd Density Mapper
-
-Provides:
-
-Spatial density estimation
-
-Heatmaps
-
-Grid-based zone analysis
-
-Low/medium/high density visualisation
-
-
-Temple Crowd Lane Management
-
-Provides:
-
-Multi-route analysis
-
-Crowd estimation
-
-Travel-time estimation
-
-Route recommendation
-
-Voice guidance
-
-
-> These modules form the computer-vision foundation. The grandprix/ engine adds the venue-level simulation, prediction, and routing layer required by the Crowd Flow Optimiser problem.
-
-
-
+* **Crowd Behaviour Analysis:** Detection, tracking, movement vectors, speed estimation, trajectory mapping.
+* **Crowd Alert System:** Real-time head counts with automatic threshold notifications.
+* **Grid Density Mapper:** Spatial heatmap overlay dividing camera feeds into actionable zones.
+* **Route Planner:** Multi-path travel time estimation and audio/visual guidance.
 
 ---
 
-🌐 API
+## 🌐 API Overview
 
-The GrandPrix engine exposes a FastAPI control plane.
+The GrandPrix engine provides a **FastAPI** control plane:
 
-Method	Endpoint	Purpose
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Service health status |
+| `GET` | `/state` | Full state of the venue digital twin |
+| `POST` | `/ingest` | Ingest real-time camera observations |
+| `POST` | `/spawn` | Add simulated agents to the venue |
+| `POST` | `/step` | Advance the simulation time step |
+| `GET` | `/forecast` | Retrieve predicted spatial densities |
+| `POST` | `/reroute` | Calculate dynamic rerouting paths |
+| `GET` | `/graph` | Export the venue structural graph |
 
-GET	/health	Health check
-GET	/state	Current digital-twin state
-POST	/ingest	Ingest crowd observations
-POST	/spawn	Add simulated crowd
-POST	/step	Advance simulation
-GET	/forecast	Retrieve predicted density
-POST	/reroute	Calculate rerouting
-GET	/graph	Inspect venue graph
-
-
-Interactive API documentation is available through FastAPI/Swagger.
-
+> [!TIP]
+> Interactive Swagger UI documentation is available at `http://127.0.0.1:8001/docs` after launch.
 
 ---
 
-⚙️ Installation
+## ⚙️ Installation
 
-1. Clone the repository
-
-git clone https://github.com/HimanshuPathak2725/Crowd-Management-system.git
+```bash
+# 1. Clone repository
+git clone [https://github.com/HimanshuPathak2725/Crowd-Management-system.git](https://github.com/HimanshuPathak2725/Crowd-Management-system.git)
 cd Crowd-Management-system
 
-2. Create a virtual environment
-
+# 2. Setup virtual environment
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-3. Install GrandPrix engine dependencies
-
+# 3. Install GrandPrix Engine dependencies
 pip install -r requirements-grandprix.txt
 
-> The original computer-vision modules may have additional dependencies depending on which module you run.
-
-
-
+```
 
 ---
 
-▶️ Run the GrandPrix Simulation
+## ▶️ Execution
 
+### Run the Simulation Demo
+
+```bash
 python -m grandprix.demo
 
-The demo simulates crowd movement through the venue and continuously reports:
+```
 
-Simulation time
+*Output Example:*
 
-Active agents
-
-Predicted bottlenecks
-
-Risk levels
-
-Dynamic rerouting decisions
-
-
-Example:
-
+```text
 t=  5.0s agents=120 rerouted=120
 worst=[('choke', 'EMERGENCY', ...)]
+→ 120 dynamic reroutes executed successfully.
 
-→ 120 dynamic reroutes
+```
 
+### Run the Control API
 
----
-
-🌐 Run the API
-
+```bash
 python -m grandprix.api
 
-Then open:
+```
 
-http://127.0.0.1:8001/docs
+### Run Automated Tests
 
-
----
-
-🧪 Testing
-
-The GrandPrix engine includes automated tests.
-
-Run:
-
+```bash
 python -m pytest -q
 
-Current baseline:
-
-3 passed
-
+```
 
 ---
 
-📊 System Workflow
+## 📊 End-to-End System Workflow
 
-The intended end-to-end workflow is:
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CCTV as CCTV / Feeds
+    participant CV as YOLOv8 Tracker
+    participant DT as Digital Twin
+    participant FC as Forecast Engine
+    participant RT as Router
+    participant Dash as Command Centre
 
-Step 1 — Observe
+    CCTV->>CV: Stream raw video frames
+    CV->>DT: Map detections to spatial zones
+    DT->>FC: Pass density time-series
+    FC->>DT: Output T+5 to T+15 projections
+    DT->>RT: Identify critical bottlenecks
+    RT->>Dash: Issue dynamic rerouting paths
 
-CCTV/video feeds provide people detections and movement information.
-
-Step 2 — Localise
-
-Detections are mapped into venue zones.
-
-Step 3 — Aggregate
-
-The system calculates:
-
-People per zone
-
-Density
-
-Flow
-
-Direction
-
-Recent trend
-
-
-Step 4 — Simulate
-
-The digital twin models how people move through the venue graph.
-
-Step 5 — Predict
-
-The forecasting layer estimates future crowd pressure.
-
-Step 6 — Detect
-
-The system identifies zones likely to become bottlenecks.
-
-Step 7 — Optimise
-
-Density-aware routing calculates safer alternatives.
-
-Step 8 — Act
-
-The system produces recommended rerouting decisions for operators and, eventually, digital signage/guidance systems.
-
+```
 
 ---
 
-🏆 Why This Approach?
+## 🏆 Closed-Loop Crowd Intelligence
 
-Many basic crowd-management systems stop at:
+Most existing tools rely on basic reactive monitoring:
 
-Detect people
-     ↓
-Count people
-     ↓
-Raise alert
 
-This project aims to close the loop:
+$$\text{Detect} \longrightarrow \text{Count} \longrightarrow \text{Alert}$$
 
-Detect
-  ↓
-Understand
-  ↓
-Simulate
-  ↓
-Predict
-  ↓
-Optimise
-  ↓
-Reroute
-  ↓
-Measure outcome
+Our system completes the proactive feedback loop:
 
-That changes the system from a reactive monitoring tool into a predictive crowd-flow optimisation platform.
+```mermaid
+flowchart LR
+    A[🔍 Detect] --> B[🧠 Understand]
+    B --> C[🎮 Simulate]
+    C --> D[🔮 Predict]
+    D --> E[⚙️ Optimise]
+    E --> F[🔀 Reroute]
+    F --> G[📊 Measure Outcome]
 
+    style A fill:#3b82f6,color:#fff
+    style D fill:#8b5cf6,color:#fff
+    style F fill:#10b981,color:#fff
+
+```
 
 ---
 
-🏁 Example F1 Scenario
+## 🏁 Example F1 Scenario
 
-Imagine thousands of spectators leaving a grandstand immediately after an F1 race.
+### Post-Race Grandstand Egress
 
-Grandstand
-    │
-    ▼
-Junction
-    │
-    ▼
-Choke Point ─────── Exit A
-    │
-    └─────────────── Exit B
+When tens of thousands of fans leave a grandstand simultaneously:
 
-The system detects rising inflow toward the choke point.
+```mermaid
+flowchart TD
+    GS[🏁 Grandstand] --> JNC[Junction]
+    JNC --> CP{🚨 Choke Point}
+    CP -->|Unmanaged Flow| EA[Exit A - Severe Overcrowding]
+    CP -->|Dynamic Reroute| EB[Exit B - Balanced Flow]
 
-Without intervention
+    style EA fill:#7f1d1d,color:#fff
+    style EB fill:#065f46,color:#fff
 
-Density
-  ↑
-  │                ███████
-  │          █████████████
-  │    ███████████████████
-  └────────────────────────→ Time
+```
 
-             🚨 CRITICAL
-
-With prediction + rerouting
-
-The system predicts the bottleneck early and diverts part of the incoming crowd toward Exit B.
-
-Incoming Crowd
-       │
-       ├──────────► Exit A
-       │
-       └──────────► Exit B
-                    ↑
-              Dynamic routing
-
-The objective is to reduce peak density, distribute crowd flow, and prevent the bottleneck from becoming dangerous.
-
+* **Without Intervention:** Density spikes exponentially at Exit A, leading to critical risk warnings.
+* **With Prediction + Rerouting:** The engine forecasts the choke point 10 minutes in advance and diverts incoming crowds toward Exit B before severe congestion builds.
 
 ---
 
-🔬 Planned Hackathon Enhancements
+## 🔬 Planned Roadmap
 
-The current engine is the foundation. The next development stages are:
+```mermaid
+flowchart LR
+    P1[Phase 1<br/>CV Integration] --> P2[Phase 2<br/>Multi-Step Forecasting]
+    P2 --> P3[Phase 3<br/>Smart Routing Rules]
+    P3 --> P4[Phase 4<br/>Command Centre]
+    P4 --> P5[Phase 5<br/>What-if Simulations]
+    P5 --> P6[Phase 6<br/>Emergency Mode]
 
-Phase 1 — Real CV → Digital Twin Integration
+```
 
-YOLO Tracking
-      ↓
-Camera calibration / homography
-      ↓
-Venue coordinates
-      ↓
-Zone-level crowd state
-      ↓
-Digital Twin
-
-Phase 2 — Stronger Forecasting
-
-Add multi-step forecasting for:
-
-T+5 min
-T+10 min
-T+15 min
-
-with uncertainty/confidence estimates.
-
-Phase 3 — Smarter Rerouting
-
-Add:
-
-Rerouting hysteresis
-
-Route-change cooldowns
-
-Flow balancing
-
-Exit capacity constraints
-
-Predicted rather than only current congestion
-
-
-Phase 4 — Command Centre
-
-Build a unified dashboard containing:
-
-Live venue digital twin
-
-Crowd heatmap
-
-Bottleneck alerts
-
-Forecast timeline
-
-Recommended routes
-
-System KPIs
-
-
-Phase 5 — What-if Simulation
-
-Allow operators to test:
-
-+1000 arriving people
-Gate closure
-Emergency at zone X
-Unexpected crowd surge
-
-and compare outcomes before taking action.
-
-Phase 6 — Emergency Evacuation
-
-Support emergency mode with:
-
-Safe-exit selection
-
-Incoming-flow suppression
-
-Evacuation route optimisation
-
-Capacity-aware exit distribution
-
-
+* **Phase 1 — Homography & Calibration:** Direct mapping of bounding boxes to world coordinate maps.
+* **Phase 2 — Multi-Step Forecasting:** Confidence intervals and uncertainty bounds for T+15 targets.
+* **Phase 3 — Routing Stability:** Hysteresis logic, cooldown timers, and flow balancing.
+* **Phase 4 — Command Centre UI:** Integrated 3D/2D digital twin dashboard with live heatmaps.
+* **Phase 5 — Scenario Testing:** Operator sandbox for simulating unexpected gate closures or crowd surges.
+* **Phase 6 — Emergency Evacuation:** Safe exit distribution and active flow suppression logic.
 
 ---
 
-📈 Evaluation Metrics
+## 📈 Key Performance Metrics
 
-The system should ultimately be evaluated using measurable outcomes:
-
-Metric	Goal
-
-Peak zone density	↓
-Average travel time	↓
-Critical bottleneck duration	↓
-Prediction MAE	↓
-Bottleneck warning lead time	↑
-Successful reroutes	↑
-Evacuation completion time	↓
-Crowd distribution imbalance	↓
-
-
-The goal is not simply to detect congestion, but to demonstrate that prediction + intervention improves crowd flow.
-
+| Metric | Target | Focus |
+| --- | --- | --- |
+| **Peak Zone Density** | 📉 Decrease | Safety |
+| **Average Travel Time** | 📉 Decrease | Efficiency |
+| **Critical Bottleneck Duration** | 📉 Decrease | Risk Mitigation |
+| **Prediction MAE** | 📉 Decrease | Forecast Accuracy |
+| **Warning Lead Time** | 📈 Increase | Early Intervention |
+| **Evacuation Completion Time** | 📉 Decrease | Emergency Response |
 
 ---
 
-🤗 Hugging Face
+## 🤗 Hugging Face Integration
 
-The hackathon requires Hugging Face to be used in the build.
+This system leverages Hugging Face infrastructure for:
 
-The architecture is designed to support Hugging Face-hosted models for learned components such as:
-
-Crowd-flow forecasting
-
-Event/context understanding
-
-Future multimodal/vision models
-
-Model evaluation and experimentation
-
-
-The final implementation should explicitly integrate a Hugging Face model into the prediction/decision pipeline rather than treating Hugging Face only as a dependency.
-
+* **Time-series Transformer models** for crowd flow prediction.
+* **Multimodal vision-language models** for automatic scene assessment.
+* **Model hosting & evaluation pipelines** to continuously benchmark forecasting accuracy.
 
 ---
 
-🛠 Tech Stack
+## 🛠 Tech Stack
 
-Computer Vision
-
-Python
-
-YOLOv8 / Ultralytics
-
-OpenCV
-
-NumPy
-
-
-Crowd Intelligence
-
-Python
-
-Graph-based modelling
-
-Capacity-constrained simulation
-
-Density-aware A*
-
-Forecasting
-
-
-Backend
-
-FastAPI
-
-Pydantic
-
-Uvicorn
-
-
-Visualisation
-
-Gradio
-
-Plotly
-
-OpenCV
-
-
-AI / ML
-
-Hugging Face
-
-Machine Learning
-
-Time-series forecasting
-
-Computer Vision
-
-
-Testing
-
-Pytest
-
-
+* **Computer Vision:** `Python`, `YOLOv8 (Ultralytics)`, `OpenCV`, `NumPy`
+* **Crowd Intelligence:** `NetworkX`, Graph Modeling, Custom A* Routing Algorithms
+* **Backend API:** `FastAPI`, `Pydantic`, `Uvicorn`
+* **Visualisation:** `Gradio`, `Plotly`, `Matplotlib`
+* **ML / AI Infrastructure:** `Hugging Face Hub`, `PyTorch`, `Scikit-learn`
+* **Testing:** `Pytest`
 
 ---
 
-📁 Repository Structure
+## 📁 Repository Structure
 
+```text
 Crowd-Management-system/
-│
-├── CROWD ALERT SYSTEM
-├── GRID DENSITY MAPPER
-├── Temple route planner
-├── crowd behaviour analysis
-│
+├── CROWD ALERT SYSTEM/
+├── GRID DENSITY MAPPER/
+├── Temple route planner/
+├── crowd behaviour analysis/
 ├── grandprix/
 │   ├── __init__.py
 │   ├── api.py
 │   ├── core.py
+│   ├── forecasting.py
 │   └── demo.py
-│
 ├── tests/
 │   └── test_grandprix.py
-│
 ├── GRANDPRIX_ENGINE.md
 ├── requirements-grandprix.txt
 └── README.md
 
+```
 
 ---
 
-🎯 Objectives
+## 👨‍💻 Author
 
-The system aims to:
+**Himanshu Pathak**
 
-Prevent dangerous crowd congestion
+*B.Tech — Computer Science & Engineering*
 
-Predict bottlenecks before they become critical
-
-Improve crowd distribution
-
-Reduce unnecessary travel time
-
-Assist event-control teams
-
-Provide dynamic rerouting recommendations
-
-Support emergency evacuation
-
-Turn raw CCTV observations into actionable crowd-flow intelligence
-
-
+🔗 **GitHub:** [@HimanshuPathak2725](https://github.com/HimanshuPathak2725)
 
 ---
 
-👨‍💻 Author
+## 📜 License
 
-Himanshu Pathak
+Distributed under the **MIT License**. See `LICENSE` for more information.
 
-B.Tech — Computer Science & Engineering
-
-GitHub:
-
-https://github.com/HimanshuPathak2725
-
-
----
-
-📜 License
-
-This project is currently developed as a hackathon/research prototype.
-
-See the repository for licensing information and third-party dependency notices.
-
-
----
-
-⭐ Project Vision
-
-> Don't wait for the crowd to become dangerous. Predict where it will happen, simulate the consequences, and reroute people before the bottleneck forms.
-
-
-
-🏁 From crowd detection → to crowd intelligence → to crowd-flow optimisation.
+> *"Don't wait for the crowd to become dangerous. Predict where it will happen, simulate the consequences, and reroute people before the bottleneck forms."*
