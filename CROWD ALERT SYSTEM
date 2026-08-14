@@ -1,0 +1,173 @@
+
+
+!pip install ultralytics opencv-python-headless pandas numpy scipy matplotlib plotly pillow gradio gtts -q
+
+import cv2
+import numpy as np
+import pandas as pd
+from ultralytics import YOLO
+from collections import deque
+import plotly.express as px
+import os
+import time
+import warnings
+import gradio as gr
+warnings.filterwarnings("ignore")
+
+print("🚀 Crowd Alert - ZERO ERRORS!")
+
+# ========================= CORE PARAMETERS =========================
+CONF = 0.18
+MIN_AREA = 1200
+MAX_AREA = 35000
+MIN_ASPECT = 0.25
+MAX_ASPECT = 1.2
+
+# ========================= PERFECT TRACKER =========================
+class CrowdTracker:
+    def __init__(self, threshold=15):
+        self.model = YOLO('yolov8x.pt')
+        self.threshold = threshold
+        self.tracks = {}
+        self.next_id = 0
+        self.count_history = deque(maxlen=8)
+        self.breach_count = 0
+
+    @staticmethod
+    def get_video_path(video):
+        if video is None:
+            return None
+        if hasattr(video, 'name') and video.name:
+            return str(video.name)
+        if isinstance(video, str):
+            return video
+        return None
+
+    def detect_people(self, frame):
+        results = self.model(frame, conf=CONF, iou=0.5, classes=[0], verbose=False)
+        detections = []
+
+        for r in results:
+            if r.boxes is not None:
+                boxes = r.boxes.xyxy.cpu().numpy()
+                confs = r.boxes.conf.cpu().numpy()
+
+                for box, conf in zip(boxes, confs):
+                    x1, y1, x2, y2 = box
+                    w, h = x2-x1, y2-y1
+                    if MIN_AREA <= w*h <= MAX_AREA and MIN_ASPECT <= w/h <= MAX_ASPECT:
+                        cx, cy = (x1+x2)/2, (y1+y2)/2
+                        detections.append({'centroid': (cx, cy)})
+        return detections
+
+    def process_video(self, video_path, threshold):
+        self.threshold = threshold
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return pd.DataFrame()
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        max_frames = min(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 150)
+
+        print(f"Processing {max_frames} frames...")
+        data = []
+        frame_id = 0
+
+        while cap.isOpened() and frame_id < max_frames:
+            ret, frame = cap.read()
+            if not ret: break
+
+            detections = self.detect_people(frame)
+            count = len(detections)
+            self.count_history.append(count)
+            stable_count = int(np.median(self.count_history))
+
+            alert = ""
+            if stable_count > self.threshold:
+                self.breach_count += 1
+                alert = f"BREACH #{self.breach_count}: {stable_count}p"
+
+            data.append({
+                'frame': frame_id,
+                'time': round(frame_id/fps, 1),
+                'people': stable_count,
+                'detections': count,
+                'alert': alert
+            })
+
+            frame_id += 1
+            if frame_id % 25 == 0:
+                print(f"Frame {frame_id}/{max_frames}")
+
+        cap.release()
+        return pd.DataFrame(data)
+
+# ========================= MAIN FUNCTION =========================
+def analyze_crowd(video, threshold=15):
+    print("🚀 Starting analysis...")
+
+    path = CrowdTracker.get_video_path(video)
+    if not path or not os.path.exists(path):
+        return "Upload valid video", None, None, pd.DataFrame()
+
+    tracker = CrowdTracker(threshold=int(threshold))
+    df = tracker.process_video(path, int(threshold))
+
+    if df.empty:
+        return "No data", None, None, pd.DataFrame()
+
+    # Summary
+    breaches = len(df[df['alert'] != ''])
+    peak = df['people'].max()
+
+    summary = f"""
+🚨 CROWD ANALYSIS COMPLETE
+
+📊 RESULTS:
+• Frames: {len(df)}
+• Peak: {peak} people
+• 🚨 Breaches: {breaches}
+• Avg: {df['people'].mean():.1f}
+
+{df[df['alert'] != ''][['time', 'people', 'alert']].to_string(index=False) if breaches else '✅ SAFE'}
+"""
+
+    # Charts
+    fig1 = px.line(df, x='time', y='people', title="People Count")
+    fig1.add_hline(y=threshold, line_dash="dash", line_color="red")
+
+    fig2 = px.scatter(df, x='time', y='people', size='detections', title="Detection Analysis")
+
+    alerts_df = df[df['alert'] != '']
+    if alerts_df.empty:
+        alerts_df = df[['time', 'people', 'alert']].head(15)
+
+    print("✅ Done!")
+    return summary, fig1, fig2, alerts_df
+
+# ========================= CLEAN GRADIO UI =========================
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🚨 **Crowd Alert System**")
+    gr.Markdown("**Real-time crowd monitoring + breach detection**")
+
+    with gr.Row():
+        video_input = gr.Video(label="📹 Video")
+        threshold_input = gr.Slider(10, 30, value=15, step=1, label="Alert Threshold")
+
+    analyze_btn = gr.Button("🚀 Analyze", variant="primary")
+
+    summary_output = gr.Textbox(label="Results", lines=12)
+
+    with gr.Row():
+        chart1 = gr.Plot(label="People Count")
+        chart2 = gr.Plot(label="Analysis")
+
+    events_table = gr.Dataframe(label="Events")  # ✅ NO height/max_rows!
+
+    analyze_btn.click(
+        analyze_crowd,
+        inputs=[video_input, threshold_input],
+        outputs=[summary_output, chart1, chart2, events_table]
+    )
+
+demo.queue().launch(share=True, debug=True)

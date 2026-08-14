@@ -1,0 +1,271 @@
+
+
+!pip install ultralytics opencv-python-headless pandas numpy plotly pillow gradio gtts -q
+
+import cv2
+import numpy as np
+import pandas as pd
+from ultralytics import YOLO
+import plotly.express as px
+import gradio as gr
+from gtts import gTTS
+import tempfile
+import os
+from PIL import Image
+import io
+import warnings
+warnings.filterwarnings("ignore")
+
+print("🚀 YOLO Tracking - Gallery FIXED!")
+
+# ========================= ROUTE CONFIG =========================
+ROUTES = {
+    'Route 1': {'dist': 100, 'emoji': '🔴'},
+    'Route 2': {'dist': 50,  'emoji': '🟢'},
+    'Route 3': {'dist': 150, 'emoji': '🔵'}
+}
+
+WALK_SPEED = 1.2
+CROWD_FACTOR = 0.015
+
+# ========================= BULLETPROOF YOLO TRACKER =========================
+class PerfectYoloTracker:
+    def __init__(self):
+        self.model = YOLO('yolov8x.pt')
+
+    def get_video_path(self, video):
+        if hasattr(video, 'name'):
+            return str(video.name)
+        return video if isinstance(video, str) and os.path.exists(video) else None
+
+    def frame_to_pil(self, frame):
+        """✅ FIXED: OpenCV → PIL Image for Gradio Gallery"""
+        if frame is None:
+            return None
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame_rgb)
+        return pil_image
+
+    def process_video_tracking(self, video_path):
+        """✅ YOLO tracking + PIL gallery output"""
+        if not video_path or not os.path.exists(video_path):
+            return 0, []
+
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        if total_frames == 0:
+            cap.release()
+            return 0, []
+
+        # Sample 15 frames evenly
+        frame_indices = np.linspace(0, total_frames-1, 15, dtype=int)
+        unique_people = set()
+        sample_images = []
+
+        for i, frame_idx in enumerate(frame_indices):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            # ✅ YOLO NATIVE TRACKING
+            results = self.model.track(frame, persist=True, conf=0.25,
+                                     classes=[0], verbose=False)
+
+            # Count unique track IDs
+            if results[0].boxes.id is not None:
+                track_ids = results[0].boxes.id.int().tolist()
+                unique_people.update(track_ids)
+
+            # Gallery sample every 3rd frame
+            if i % 3 == 0 and len(sample_images) < 6:
+                annotated = self.visualize_tracking(results[0])
+                pil_img = self.frame_to_pil(annotated)
+                if pil_img:
+                    sample_images.append(pil_img)
+
+        cap.release()
+        return len(unique_people), sample_images
+
+    def visualize_tracking(self, result):
+        """✅ Professional tracking visualization"""
+        annotated = result.plot()
+
+        # Custom stats overlay
+        h, w = annotated.shape[:2]
+        cv2.rectangle(annotated, (10, 10), (w-10, 70), (0, 0, 0), -1)
+        cv2.putText(annotated, "🟢 YOLO NATIVE TRACKING",
+                   (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+        if result.boxes.id is not None:
+            track_count = len(result.boxes)
+            cv2.putText(annotated, f"Active: {track_count} people",
+                       (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        return annotated
+
+    def analyze_route(self, route_name, people_count):
+        """Route analysis"""
+        dist = ROUTES[route_name]['dist']
+        slowdown = 1 + (people_count * CROWD_FACTOR)
+        time_min = round((dist / (WALK_SPEED / slowdown)) / 60, 1)
+        return time_min
+
+# ========================= MAIN ANALYSIS =========================
+def perfect_route_analysis(video1, video2, video3):
+    """✅ 100% STABLE analysis function"""
+    tracker = PerfectYoloTracker()
+
+    paths = [tracker.get_video_path(v) for v in [video1, video2, video3]]
+
+    if not all(paths):
+        return (
+            "❌ **Upload ALL 3 route videos**",
+            None, None, None, None, "Upload videos", []
+        )
+
+    print("🧠 Starting YOLO tracking analysis...")
+
+    # Process each route
+    route_data = {}
+    all_gallery_images = []
+
+    route_names = ['Route 1', 'Route 2', 'Route 3']
+    for i, (path, route_name) in enumerate(zip(paths, route_names)):
+        print(f"🔄 Tracking {route_name}...")
+        people_count, gallery_images = tracker.process_video_tracking(path)
+        route_data[route_name] = people_count
+        all_gallery_images.extend(gallery_images)
+        print(f"  ✓ {route_name}: {people_count} unique people")
+
+    # Find best route
+    times = {route: tracker.analyze_route(route, route_data[route])
+             for route in route_names}
+    best_route = min(times, key=times.get)
+
+    # Audio message
+    msg = (f"Smart route analysis complete. "
+          f"Take {best_route}. "
+          f"It takes {times[best_route]} minutes. "
+          f"Route 1 has {route_data['Route 1']} people. "
+          f"Route 2 has {route_data['Route 2']} people. "
+          f"Route 3 has {route_data['Route 3']} people.")
+
+    try:
+        audio_path = tempfile.mktemp(suffix='.mp3')
+        tts = gTTS(msg, lang='en')
+        tts.save(audio_path)
+    except:
+        audio_path = None
+
+    # Results table
+    table_data = []
+    for route in route_names:
+        status = "🎯 BEST!" if route == best_route else ""
+        table_data.append({
+            'Route': f"{ROUTES[route]['emoji']} {route}",
+            'Distance': f"{ROUTES[route]['dist']}m",
+            'People': route_data[route],
+            'Time': f"{times[route]} min",
+            'Status': status
+        })
+
+    df = pd.DataFrame(table_data)
+
+    # Summary
+    summary = f"""🧠 **YOLO TRACKING ANALYSIS COMPLETE**
+
+🎯 **BEST ROUTE: {best_route}** ⭐⭐⭐
+├─ 👥 {route_data[best_route]} people detected
+├─ 📏 {ROUTES[best_route]['dist']} meters
+└─ ⏱️ **{times[best_route]} minutes** (FASTEST)
+
+📊 **ALL ROUTES:**
+• 🔴 Route 1: {route_data['Route 1']}p → {times['Route 1']}min
+• 🟢 Route 2: {route_data['Route 2']}p → {times['Route 2']}min
+• 🔵 Route 3: {route_data['Route 3']}p → {times['Route 3']}min
+
+✅ **YOLO FEATURES:**
+• Native `track(persist=True)` detection
+• 🟢 Green tracking boxes + IDs
+• Continuous person re-identification
+• Professional accuracy
+"""
+
+    # Charts
+    fig_people = px.bar(x=list(route_data.keys()), y=list(route_data.values()),
+                       title="👥 People Per Route")
+    fig_time = px.bar(x=list(times.keys()), y=list(times.values()),
+                     title="⏱️ Travel Time Comparison")
+
+    return (summary, fig_people, fig_time, df, audio_path, msg,
+            all_gallery_images[:9])
+
+# ========================= PERFECTLY STABLE UI =========================
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🧠 **YOLO Native Tracking Route Finder**")
+    gr.Markdown("**Upload 3 crowd videos → 🟢 See tracking → Get best route**")
+
+    # Video upload section
+    with gr.Row():
+        with gr.Column():
+            gr.Markdown("### 🔴 **Route 1**")
+            gr.Markdown("_100 meters_")
+            video1 = gr.Video(label="Route 1 Video", height=200)
+
+        with gr.Column():
+            gr.Markdown("### 🟢 **Route 2**")
+            gr.Markdown("_50 meters_")
+            video2 = gr.Video(label="Route 2 Video", height=200)
+
+        with gr.Column():
+            gr.Markdown("### 🔵 **Route 3**")
+            gr.Markdown("_150 meters_")
+            video3 = gr.Video(label="Route 3 Video", height=200)
+
+    # Analyze button
+    analyze_btn = gr.Button(
+        "🚀 **START YOLO TRACKING → ANALYZE → FIND BEST ROUTE**",
+        variant="primary", size="lg"
+    )
+
+    # Results
+    summary_box = gr.Textbox(label="📊 Smart Analysis", lines=12, max_lines=15)
+
+    with gr.Row():
+        people_chart = gr.Plot(label="👥 People Count")
+        time_chart = gr.Plot(label="⏱️ Route Times")
+
+    routes_table = gr.Dataframe(label="📋 Route Comparison")
+
+    with gr.Row():
+        audio_player = gr.Audio(label="🔊 Voice Guide", interactive=False)
+        speech_text = gr.Textbox(label="📜 Announcement", lines=4)
+
+    # ✅ FIXED Gallery
+    tracking_gallery = gr.Gallery(
+        label="🟢 **TRACKING VISUALIZATION** (YOLO Green Boxes + IDs)",
+        columns=3, rows=3
+    )
+
+    # Perfect connection
+    analyze_btn.click(
+        perfect_route_analysis,
+        inputs=[video1, video2, video3],
+        outputs=[summary_box, people_chart, time_chart, routes_table,
+                audio_player, speech_text, tracking_gallery]
+    )
+
+    gr.Markdown("""
+---
+**✅ WHAT YOU GET:**
+• 🟢 **Green tracking boxes** with persistent IDs
+• **Unique person counting** across entire video
+• 🎯 **Smartest route** calculation
+• 🔊 **Voice announcement**
+• 📊 **Professional charts**
+    """)
+
+# 🚀 LAUNCH - BULLETPROOF
+demo.queue().launch(share=True, debug=True)

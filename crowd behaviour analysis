@@ -1,0 +1,413 @@
+# =============================================================================
+# 🚀 COLAB + GRADIO CROWD BEHAVIOR ANALYTICS
+#   - Continuous person tracking (boxes never disappear)
+#   - Grid-based density & flow (NEC crowd behavior analysis style)
+#   - Pattern detection: abnormal congestion, mass fleeing, stagnant groups
+# =============================================================================
+
+!pip install ultralytics opencv-python-headless pandas numpy scipy matplotlib plotly pillow gradio -q
+
+import cv2
+import numpy as np
+import pandas as pd
+from ultralytics import YOLO
+from collections import defaultdict, deque
+import matplotlib.pyplot as plt
+import plotly.express as px
+from PIL import Image
+import os
+import warnings
+import gradio as gr
+warnings.filterwarnings("ignore")
+
+# ========================= MODEL LOADING =========================
+def load_model():
+    # Yolov8x person detector (class 0)
+    return YOLO("yolov8x.pt")
+
+model = load_model()
+
+# ========================= TRACKER CLASS =========================
+class ContinuousTracker:
+    def __init__(self,
+                 up_scale=1.5,
+                 grid_rows=4,
+                 grid_cols=4,
+                 max_age=150,
+                 max_dist=120):
+        self.model = model
+        self.person_tracks = defaultdict(list)
+        self.all_heatmaps = []
+        self.all_speeds = []
+        self.max_age = max_age
+        self.max_dist = max_dist
+        self.up_scale = up_scale
+        self.grid_rows = grid_rows
+        self.grid_cols = grid_cols
+
+    # ---------- basic helpers ----------
+    def split_into_tiles(self, frame, rows=2, cols=2):
+        h, w, _ = frame.shape
+        tiles = []
+        tile_h = h // rows
+        tile_w = w // cols
+        for r in range(rows):
+            for c in range(cols):
+                y1, y2 = r * tile_h, (r + 1) * tile_h
+                x1, x2 = c * tile_w, (c + 1) * tile_w
+                tiles.append((frame[y1:y2, x1:x2], r, c))
+        return tiles
+
+    def non_max_suppression(self, boxes, iou_threshold=0.45):
+        if len(boxes) == 0:
+            return []
+        x1, y1, x2, y2, scores = boxes[:,0], boxes[:,1], boxes[:,2], boxes[:,3], boxes[:,4]
+        areas = (x2 - x1)*(y2 - y1)
+        order = scores.argsort()[::-1]
+        keep = []
+        while len(order) > 0:
+            i = order[0]
+            keep.append(i)
+            if len(order) == 1:
+                break
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+            w = np.maximum(0, xx2 - xx1)
+            h = np.maximum(0, yy2 - yy1)
+            inter = w*h
+            iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+            inds = np.where(iou <= iou_threshold)[0]
+            order = order[inds + 1]
+        return boxes[keep]
+
+    # ---------- ID persistence ----------
+    def persistent_assign_id(self, current_centroids):
+        if len(current_centroids) == 0:
+            return {pid: -1 for pid in self.person_tracks.keys()}
+
+        current_centroids = np.array(current_centroids)
+        assignments = {}
+        for person_id, track in self.person_tracks.items():
+            if len(track) < self.max_age and len(track) > 0:
+                prev_cx, prev_cy = track[-1]['centroid']
+                distances = np.sqrt(np.sum((current_centroids - [prev_cx, prev_cy])**2, axis=1))
+                if len(distances) > 0:
+                    closest_idx = np.argmin(distances)
+                    if distances[closest_idx] < self.max_dist:
+                        assignments[person_id] = closest_idx
+                        continue
+            # carry forward
+            assignments[person_id] = -1
+
+        next_id = max(self.person_tracks.keys(), default=0)
+        for i in range(len(current_centroids)):
+            if i not in assignments.values():
+                while next_id in assignments:
+                    next_id += 1
+                assignments[next_id] = i
+                next_id += 1
+        return assignments
+
+    # ---------- grid-based density & flow ----------
+    def init_grid_stats(self, frame_shape):
+        h, w = frame_shape[:2]
+        self.cell_h = h / self.grid_rows
+        self.cell_w = w / self.grid_cols
+
+    def get_cell_index(self, cx, cy):
+        r = int(cy // self.cell_h)
+        c = int(cx // self.cell_w)
+        r = max(0, min(self.grid_rows-1, r))
+        c = max(0, min(self.grid_cols-1, c))
+        return r, c
+
+    # NEC-style features:
+    #   population density: persons per cell
+    #   people flow: sum of speed magnitudes per cell [web:365][web:368]
+    def compute_grid_features(self, frame_id):
+        density = np.zeros((self.grid_rows, self.grid_cols), dtype=float)
+        flow = np.zeros((self.grid_rows, self.grid_cols), dtype=float)
+
+        for pid, track in self.person_tracks.items():
+            if len(track) == 0:
+                continue
+            last = track[-1]
+            if last['frame'] != frame_id:
+                continue
+            cx, cy = last['centroid']
+            r, c = self.get_cell_index(cx, cy)
+            density[r, c] += 1
+
+            # approximate instantaneous speed
+            if len(track) > 1:
+                prev = track[-2]
+                if prev['frame'] == frame_id - 1:
+                    dx = cx - prev['centroid'][0]
+                    dy = cy - prev['centroid'][1]
+                    speed = np.sqrt(dx*dx + dy*dy)
+                    flow[r, c] += speed
+
+        return density, flow
+
+    # ---------- main video processing ----------
+    def process_video(self, video_path):
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError("Cannot open video")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_id = 0
+        results_log = []
+        temporal_avg = deque(maxlen=15)
+        grid_density_time = []
+        grid_flow_time = []
+        alerts = []
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"Total frames: {total_frames}")
+
+        ret, first_frame = cap.read()
+        if not ret:
+            raise RuntimeError("Empty video")
+        first_frame = cv2.resize(first_frame, None, fx=self.up_scale, fy=self.up_scale)
+        self.init_grid_stats(first_frame.shape)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frame = cv2.resize(frame, None, fx=self.up_scale, fy=self.up_scale)
+            tiles = self.split_into_tiles(frame)
+
+            all_boxes = []
+            current_centroids = []
+            current_person_data = []
+
+            # tuned detection (same idea as your script)
+            for tile, r, c in tiles:
+                res = self.model(tile, conf=0.12, iou=0.55, classes=[0],
+                                 imgsz=1280, verbose=False, half=True)
+                if len(res) > 0 and res[0].boxes is not None:
+                    tile_h, tile_w = tile.shape[:2]
+                    for box in res[0].boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        conf = box.conf[0].cpu().numpy()
+                        width = x2 - x1
+                        height = y2 - y1
+                        area = width * height
+                        aspect = width / (height + 1e-6)
+                        if 150 < area < 40000 and 0.2 < aspect < 0.85:
+                            gx1, gy1 = c * tile_w + x1, r * tile_h + y1
+                            gx2, gy2 = c * tile_w + x2, r * tile_h + y2
+                            all_boxes.append([gx1, gy1, gx2, gy2, conf])
+                            cx, cy = (gx1 + gx2)/2, (gy1 + gy2)/2
+                            current_centroids.append((cx, cy))
+                            current_person_data.append({
+                                "bbox": [gx1, gy1, gx2, gy2],
+                                "conf": conf,
+                                "centroid": (cx, cy)
+                            })
+
+            assignments = self.persistent_assign_id(current_centroids)
+            raw_count = len(all_boxes)
+
+            # update tracks
+            for pid, idx in assignments.items():
+                if idx >= 0 and idx < len(current_person_data):
+                    d = current_person_data[idx]
+                    cx, cy = d["centroid"]
+                    self.person_tracks[pid].append({
+                        "frame": frame_id,
+                        "centroid": (cx, cy),
+                        "bbox": d["bbox"],
+                        "conf": d["conf"],
+                        "detected": True
+                    })
+                    if len(self.person_tracks[pid]) > 1:
+                        prev = self.person_tracks[pid][-2]
+                        if prev["frame"] == frame_id - 1:
+                            dx = cx - prev["centroid"][0]
+                            dy = cy - prev["centroid"][1]
+                            speed = np.sqrt(dx*dx + dy*dy) * fps
+                            self.all_speeds.append(speed)
+                    self.all_heatmaps.append((cx, cy))
+                else:
+                    if len(self.person_tracks[pid]) > 0:
+                        last = self.person_tracks[pid][-1]
+                        self.person_tracks[pid].append({
+                            "frame": frame_id,
+                            "centroid": last["centroid"],
+                            "bbox": last["bbox"],
+                            "conf": 0.1,
+                            "detected": False
+                        })
+
+            temporal_avg.append(raw_count)
+            smoothed_count = int(np.mean(temporal_avg))
+
+            density, flow = self.compute_grid_features(frame_id)
+            grid_density_time.append(density)
+            grid_flow_time.append(flow)
+
+            # simple NEC-style pattern detection rules [web:365][web:368]
+            alert_msgs = []
+            # abnormal congestion: any cell density above threshold_d for N frames
+            density_sum = density.max()
+            flow_sum = flow.max()
+            # thresholds are rough, you can tune
+            if density_sum >= 8:
+                alert_msgs.append("Abnormal congestion in high-density cell")
+            # fleeing: high flow + not high density
+            if flow_sum >= 40 and density_sum <= 5:
+                alert_msgs.append("Possible mass fleeing (high flow, moderate density)")
+            # stagnant group: high density and low flow
+            if density_sum >= 5 and flow_sum <= 5:
+                alert_msgs.append("Stagnant / crowding group detected")
+
+            alerts.append(", ".join(alert_msgs) if alert_msgs else "")
+
+            results_log.append({
+                "frame": frame_id,
+                "time_sec": frame_id / fps,
+                "people": smoothed_count,
+                "raw_count": raw_count,
+                "active_tracks": len(self.person_tracks),
+                "alert": alerts[-1]
+            })
+
+            if frame_id % 50 == 0:
+                print(f"Frame {frame_id}: people={smoothed_count} tracks={len(self.person_tracks)} alerts={alerts[-1]}")
+            frame_id += 1
+
+        cap.release()
+        df = pd.DataFrame(results_log)
+        return df, np.array(grid_density_time), np.array(grid_flow_time), alerts
+
+    def build_analytics(self, df, grid_density_time, grid_flow_time):
+        track_stats = []
+        for pid, track in self.person_tracks.items():
+            total_frames = len(track)
+            detected_frames = len([p for p in track if p["detected"]])
+            if total_frames == 0:
+                continue
+            # average speed over track
+            speeds = []
+            for i in range(1, total_frames):
+                p1, p2 = track[i-1], track[i]
+                if p2["frame"] == p1["frame"] + 1:
+                    dx = p2["centroid"][0] - p1["centroid"][0]
+                    dy = p2["centroid"][1] - p1["centroid"][1]
+                    v = np.sqrt(dx*dx + dy*dy)
+                    speeds.append(v)
+            avg_speed = float(np.mean(speeds)) if len(speeds) > 0 else 0.0
+            track_stats.append({
+                "ID": pid,
+                "Duration(frames)": total_frames,
+                "Detected%": detected_frames/total_frames*100.0,
+                "AvgSpeed(pixels/frame)": avg_speed
+            })
+
+        # global congestion metrics (mean density/flow over grid) [web:365][web:368]
+        mean_density = grid_density_time.mean(axis=(1,2))
+        mean_flow = grid_flow_time.mean(axis=(1,2))
+
+        analytics = {
+            "total_unique_people": len(self.person_tracks),
+            "peak_crowd": df["people"].max(),
+            "avg_crowd": df["people"].mean(),
+            "mean_density": mean_density,
+            "mean_flow": mean_flow,
+            "track_stats": pd.DataFrame(track_stats)
+        }
+        return analytics
+
+# ========================= GRADIO PIPELINE =========================
+def analyze_video(video_file):
+    if video_file is None:
+        return "No video", None, None, None, None
+
+    # Save to temp path
+    video_path = video_file
+
+    tracker = ContinuousTracker()
+    df, gd, gf, alerts = tracker.process_video(video_path)
+    analytics = tracker.build_analytics(df, gd, gf)
+
+    # 1) global time-series fig (people, mean density, mean flow)
+    t = df["time_sec"]
+    fig1 = px.line(df, x="time_sec", y="people", title="People count over time")
+    fig1.update_layout(xaxis_title="Time (s)", yaxis_title="People")
+
+    fig2 = px.line(x=t, y=analytics["mean_density"], title="Mean grid population density over time")
+    fig2.update_layout(xaxis_title="Time (s)", yaxis_title="Mean density (persons/cell)")
+
+    fig3 = px.line(x=t, y=analytics["mean_flow"], title="Mean people flow over time")
+    fig3.update_layout(xaxis_title="Time (s)", yaxis_title="Mean flow (speed sum)")
+
+    # 2) density heatmap at peak congestion frame
+    peak_idx = int(df["people"].idxmax())
+    density_peak = gd[peak_idx]
+    fig_heat = px.imshow(density_peak, title=f"Grid density heatmap at peak (frame {peak_idx})",
+                         labels=dict(color="persons"),
+                         origin="lower",
+                         x=list(range(density_peak.shape[1])),
+                         y=list(range(density_peak.shape[0])))
+
+    # 3) per-person speed histogram
+    speeds_all = analytics["track_stats"]["AvgSpeed(pixels/frame)"]
+    fig_speed = px.histogram(speeds_all, nbins=30,
+                             title="Average per-person speed distribution",
+                             labels={"value": "Avg speed (pixels/frame)"})
+
+    # 4) textual pattern summary
+    abnormal_frames = df[df["alert"] != ""]
+    if len(abnormal_frames) == 0:
+        pattern_text = "No abnormal congestion / fleeing / stagnant patterns detected."
+    else:
+        pattern_text = "Detected patterns:\n"
+        for _, row in abnormal_frames.iterrows():
+            pattern_text += f"- t={row['time_sec']:.1f}s (frame {int(row['frame'])}): {row['alert']}\n"
+
+    # return: text summary, figures, per-person table
+    return (f"Total unique people: {analytics['total_unique_people']}\n"
+            f"Peak crowd: {analytics['peak_crowd']}\n"
+            f"Average crowd: {analytics['avg_crowd']:.1f}\n\n"
+            + pattern_text,
+            fig1, fig2, fig3, fig_heat, fig_speed,
+            analytics["track_stats"])
+
+# ========================= GRADIO UI =========================
+with gr.Blocks() as demo:
+    gr.Markdown("# 🚦 Crowd Behavior Analytics (Grid Density + Flow + Patterns)")
+    gr.Markdown(
+        "Uploads a video, tracks each person, computes grid crowd **density** and "
+        "**people flow**, and detects abnormal patterns (congestion, fleeing, stagnant groups) "
+        "based on NEC-style crowd behavior analysis. [web:365][web:368]"
+    )
+
+    video_input = gr.Video(label="Upload crowd video")
+    run_btn = gr.Button("Run Analysis")
+
+    summary = gr.Textbox(label="Analytics summary")
+    fig_people = gr.Plot(label="People count over time")
+    fig_density = gr.Plot(label="Mean density over time")
+    fig_flow = gr.Plot(label="Mean flow over time")
+    fig_heat = gr.Plot(label="Peak density heatmap (grid)")
+    fig_speed = gr.Plot(label="Per-person average speed distribution")
+    track_table = gr.Dataframe(label="Per-person track statistics",
+                               interactive=False)
+
+    run_btn.click(
+        fn=analyze_video,
+        inputs=video_input,
+        outputs=[summary,
+                 fig_people, fig_density, fig_flow,
+                 fig_heat, fig_speed,
+                 track_table]
+    )
+
+demo.launch(debug=False)
