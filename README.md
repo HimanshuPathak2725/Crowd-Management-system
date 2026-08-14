@@ -1,323 +1,851 @@
-# 🛕 Temple Crowd Management System using AI & Computer Vision
+# 🏁 F1 Stadium Crowd Flow Optimiser
 
-## 📌 Overview
+> **Real-time crowd simulation, bottleneck forecasting, and dynamic rerouting for large venues.**
 
-The **Temple Crowd Management System** is an AI-powered intelligent surveillance solution designed to improve crowd safety in temples and other large public gatherings. The system uses **YOLOv8**, **OpenCV**, and **Machine Learning** to monitor crowd movement, analyze crowd behavior, detect overcrowding, generate real-time alerts, visualize crowd density, and recommend the safest evacuation routes.
+An AI-assisted crowd management system designed for stadiums, motorsport venues, festivals, railway stations, and other high-density public events.
 
-The project aims to reduce the risk of stampedes and crowd-related accidents by providing authorities with real-time insights and automated decision support.
+The project combines **computer vision**, **crowd-density analysis**, a **venue digital twin**, **capacity-aware crowd simulation**, **bottleneck forecasting**, and **dynamic route optimisation** to help event operators identify dangerous crowd build-ups *before* they become critical and guide people toward safer, less congested paths.
 
----
-
-# 🎯 Problem Statement
-
-Large public gatherings often face serious safety challenges due to:
-
-- Overcrowding
-- Poor crowd monitoring
-- Congestion at narrow pathways
-- Delayed emergency response
-- Lack of intelligent evacuation guidance
-
-This project addresses these challenges using AI-based video analytics and real-time crowd monitoring.
+> **Hackathon Problem Statement:** Crowd Flow Optimiser — *Simulating and rerouting crowds in real time.*
 
 ---
 
-# 🚀 Features
+## 🎯 Problem
 
-- 👥 Real-time People Detection
-- 🎯 Person Tracking using YOLOv8
-- 📊 Crowd Behaviour Analysis
-- 🚨 Automatic Crowd Alerts
-- 🔥 Crowd Density Heatmaps
-- 🛣 Smart Route Recommendation
-- 🔊 Voice-based Alerts
-- 📈 Interactive Dashboard
-- 📹 CCTV Video Analysis
-- ⚡ Real-Time Processing
+Large venues can develop dangerous crowd concentrations around:
 
----
+- Entry and exit gates
+- Narrow walkways and choke points
+- Food/concession areas
+- Junctions
+- Grandstands and spectator zones
+- Emergency exits
 
-# 🏗 Project Architecture
+Traditional monitoring is mostly reactive: an operator sees that an area is already crowded and then responds.
 
-```
-                    CCTV Camera Videos
-                           │
-                           ▼
-                 YOLOv8 Person Detection
-                           │
-        ┌──────────────────┼──────────────────┐
-        ▼                  ▼                  ▼
- Crowd Behaviour     Crowd Alert        Crowd Density
-    Analysis            System             Mapper
-        │                  │                  │
-        └──────────────┬───┴──────────────────┘
-                       ▼
-            Safe Exit Route Recommendation
-                       ▼
-                Control Room Dashboard
-```
+The goal of this project is to move from:
+
+```text
+"Where is the crowd right now?"
+
+to:
+
+"Where is the crowd likely to become dangerous,
+when will it happen, and what should we do now?"
+
 
 ---
 
-# 📂 Project Modules
+💡 What We Build
 
-## 1️⃣ Crowd Behaviour Analysis
+The system is designed around a closed-loop crowd-management pipeline:
 
-This module analyzes the movement and behavior of the crowd in real time.
+┌───────────────────────┐
+│ CCTV / Video Streams  │
+└───────────┬───────────┘
+            │
+            ▼
+┌───────────────────────┐
+│ YOLOv8 Person         │
+│ Detection + Tracking  │
+└───────────┬───────────┘
+            │
+            ▼
+┌───────────────────────┐
+│ Crowd / Zone          │
+│ Aggregation           │
+└───────────┬───────────┘
+            │
+            ▼
+┌────────────────────────────────┐
+│       VENUE DIGITAL TWIN       │
+│                                │
+│ Zones + Walkways + Capacities  │
+│ + Crowd Simulation             │
+└───────────────┬────────────────┘
+                │
+        ┌───────┴────────┐
+        ▼                ▼
+┌──────────────┐  ┌───────────────┐
+│ Forecasting  │  │ Bottleneck /  │
+│ T+5/T+10/T+15│  │ Risk Engine   │
+└──────┬───────┘  └───────┬───────┘
+       └──────────┬───────┘
+                  ▼
+        ┌────────────────────┐
+        │ Dynamic Route      │
+        │ Optimisation       │
+        └─────────┬──────────┘
+                  ▼
+      ┌───────────────────────────┐
+      │ Operator Dashboard /      │
+      │ Recommended Rerouting     │
+      └───────────────────────────┘
 
-### Features
-
-- Real-time people detection
-- Person tracking
-- Crowd movement analysis
-- Walking speed estimation
-- Direction analysis
-- Path trajectory visualization
-- Crowd flow monitoring
-- Detection of abnormal crowd behaviour
-- Interactive dashboard
-
-### Technologies
-
-- YOLOv8
-- OpenCV
-- Python
-- Gradio
-
----
-
-## 2️⃣ Crowd Alert System
-
-This module continuously monitors crowd density and automatically sends alerts whenever the number of people exceeds a predefined threshold.
-
-### Features
-
-- Real-time crowd counting
-- Density monitoring
-- Configurable threshold
-- Automatic alert generation
-- Control room notification
-- Live dashboard
-- Visual warnings
-
-### Applications
-
-- Temple entrances
-- Queue management
-- Festival crowd monitoring
-- Emergency response
-
----
-
-## 3️⃣ Crowd Density Mapper
-
-This module creates a real-time density map of the crowd to identify congestion zones.
-
-### Features
-
-- Density heatmap generation
-- High-density zone detection
-- Safe zone identification
-- Color-coded risk visualization
-- Grid-based crowd analysis
-- Live monitoring dashboard
-
-### Output
-
-- Green → Low Density
-- Yellow → Medium Density
-- Red → High Density
 
 ---
 
-## 4️⃣ Temple Crowd Lane Management
+🚀 Current Capabilities
 
-This module recommends the safest and fastest route by analyzing crowd density on multiple pathways.
+The repository contains two layers.
 
-### Features
+1. Existing Computer-Vision Modules
 
-- Multi-route crowd monitoring
-- Person tracking
-- Crowd estimation
-- Travel time prediction
-- Smart route recommendation
-- Voice guidance
-- Interactive visualization
+The original project provides:
+
+👥 Real-time person detection
+
+🎯 YOLOv8-based tracking
+
+📊 Crowd counting
+
+🔥 Grid-based density mapping
+
+🚨 Crowd threshold alerts
+
+🧭 Multi-route crowd analysis
+
+🛣 Route recommendation
+
+🔊 Voice guidance
+
+📈 Interactive visualisations
+
+📹 CCTV/video analysis
+
+🧠 Crowd movement / behaviour analysis
+
+
+2. GrandPrix Crowd Intelligence Engine
+
+The new grandprix/ package adds the predictive and simulation layer:
+
+🗺️ Venue graph / digital-twin representation
+
+👥 Capacity-aware crowd simulation
+
+📈 Online density forecasting
+
+🚨 Bottleneck risk classification
+
+🧭 Density-aware A* routing
+
+🔀 Dynamic rerouting
+
+🌐 FastAPI control plane
+
+🧪 Automated tests
+
+🎮 Reproducible simulation demo
+
+
 
 ---
 
-## 5️⃣ Safe Exit Guidance
+🧠 GrandPrix Engine
 
-This module helps people evacuate safely during emergencies.
+The core engine lives in:
 
-### Features
+grandprix/
+├── __init__.py
+├── core.py       # Digital twin, simulation, forecasting, routing
+├── api.py        # FastAPI interface
+└── demo.py       # End-to-end simulation demo
 
-- Congestion prediction
-- Emergency evacuation support
-- Smart exit guidance
-- Safe path recommendation
-- AI-assisted decision making
-- Real-time updates
 
 ---
 
-# 🛠 Technologies Used
+🗺️ Digital Twin
 
-- Python
-- YOLOv8
-- OpenCV
-- NumPy
-- Pandas
-- Plotly
-- Gradio
-- Pillow
-- gTTS
-- Machine Learning
-- Computer Vision
+The venue is represented as a graph:
+
+North
+                   │
+             ┌─────┴─────┐
+             │           │
+          Junction W   Junction E
+             │           │
+Gate A ──────┤           ├────── Gate B
+             │           │
+             └─────┬─────┘
+                   │
+                Choke
+                   │
+                 Exit
+
+Each zone/node can carry information such as:
+
+Capacity
+
+Current population
+
+Predicted population
+
+Risk level
+
+
+Walkways/edges carry information such as:
+
+Distance
+
+Capacity
+
+Travel cost
+
+Congestion pressure
+
+
+This allows the physical venue to be represented as a computational model that can be simulated and optimised.
+
 
 ---
 
-# 📁 Project Structure
+🔮 Bottleneck Forecasting
 
-```
-Temple-Crowd-Management-System/
+Instead of only reacting to current crowd density, the engine projects future density from recent observations.
 
+The current prototype uses a lightweight and interpretable forecasting approach based on:
+
+Exponentially weighted density history
+
+Recent trend
+
+Capacity-aware risk thresholds
+
+
+The forecasting interface is intentionally modular so a stronger learned model can replace the baseline without changing the rest of the system.
+
+Future model candidates include:
+
+XGBoost / LightGBM
+
+Temporal regression
+
+LSTM / GRU
+
+Temporal Transformers
+
+
+
+---
+
+🚨 Bottleneck Detection
+
+Predicted density is converted into operational risk levels:
+
+NORMAL
+   ↓
+WARNING
+   ↓
+CRITICAL
+   ↓
+EMERGENCY
+
+The system ranks the most problematic zones so operators can focus on the areas that need intervention first.
+
+Example:
+
+Zone             Predicted Risk
+────────────────────────────────
+Main Choke       EMERGENCY
+West Junction    CRITICAL
+Gate B           WARNING
+North Corridor   NORMAL
+
+
+---
+
+🧭 Dynamic Rerouting
+
+The routing engine does not simply choose the shortest path.
+
+It considers:
+
+Travel distance
+       +
+Current congestion
+       +
+Capacity pressure
+       +
+Predicted crowding
+
+Therefore, a slightly longer path can become preferable when the shortest path is heavily congested.
+
+┌─────────────┐
+                 │ Destination │
+                 └──────┬──────┘
+                        │
+              ┌─────────┴─────────┐
+              │                   │
+        Short route          Alternate route
+        HIGH congestion      LOW congestion
+              │                   │
+              ▼                   ▼
+        Higher cost           Lower cost
+                                  │
+                                  ▼
+                         Recommended route
+
+
+---
+
+🎥 Existing Computer Vision Pipeline
+
+The repository already contains several CV-oriented modules.
+
+Crowd Behaviour Analysis
+
+Provides:
+
+Person detection
+
+Tracking
+
+Movement analysis
+
+Speed estimation
+
+Direction analysis
+
+Trajectory visualisation
+
+Crowd-flow monitoring
+
+
+Crowd Alert System
+
+Provides:
+
+Real-time crowd counting
+
+Configurable thresholds
+
+Automatic alerts
+
+Live monitoring
+
+
+Crowd Density Mapper
+
+Provides:
+
+Spatial density estimation
+
+Heatmaps
+
+Grid-based zone analysis
+
+Low/medium/high density visualisation
+
+
+Temple Crowd Lane Management
+
+Provides:
+
+Multi-route analysis
+
+Crowd estimation
+
+Travel-time estimation
+
+Route recommendation
+
+Voice guidance
+
+
+> These modules form the computer-vision foundation. The grandprix/ engine adds the venue-level simulation, prediction, and routing layer required by the Crowd Flow Optimiser problem.
+
+
+
+
+---
+
+🌐 API
+
+The GrandPrix engine exposes a FastAPI control plane.
+
+Method	Endpoint	Purpose
+
+GET	/health	Health check
+GET	/state	Current digital-twin state
+POST	/ingest	Ingest crowd observations
+POST	/spawn	Add simulated crowd
+POST	/step	Advance simulation
+GET	/forecast	Retrieve predicted density
+POST	/reroute	Calculate rerouting
+GET	/graph	Inspect venue graph
+
+
+Interactive API documentation is available through FastAPI/Swagger.
+
+
+---
+
+⚙️ Installation
+
+1. Clone the repository
+
+git clone https://github.com/HimanshuPathak2725/Crowd-Management-system.git
+cd Crowd-Management-system
+
+2. Create a virtual environment
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+3. Install GrandPrix engine dependencies
+
+pip install -r requirements-grandprix.txt
+
+> The original computer-vision modules may have additional dependencies depending on which module you run.
+
+
+
+
+---
+
+▶️ Run the GrandPrix Simulation
+
+python -m grandprix.demo
+
+The demo simulates crowd movement through the venue and continuously reports:
+
+Simulation time
+
+Active agents
+
+Predicted bottlenecks
+
+Risk levels
+
+Dynamic rerouting decisions
+
+
+Example:
+
+t=  5.0s agents=120 rerouted=120
+worst=[('choke', 'EMERGENCY', ...)]
+
+→ 120 dynamic reroutes
+
+
+---
+
+🌐 Run the API
+
+python -m grandprix.api
+
+Then open:
+
+http://127.0.0.1:8001/docs
+
+
+---
+
+🧪 Testing
+
+The GrandPrix engine includes automated tests.
+
+Run:
+
+python -m pytest -q
+
+Current baseline:
+
+3 passed
+
+
+---
+
+📊 System Workflow
+
+The intended end-to-end workflow is:
+
+Step 1 — Observe
+
+CCTV/video feeds provide people detections and movement information.
+
+Step 2 — Localise
+
+Detections are mapped into venue zones.
+
+Step 3 — Aggregate
+
+The system calculates:
+
+People per zone
+
+Density
+
+Flow
+
+Direction
+
+Recent trend
+
+
+Step 4 — Simulate
+
+The digital twin models how people move through the venue graph.
+
+Step 5 — Predict
+
+The forecasting layer estimates future crowd pressure.
+
+Step 6 — Detect
+
+The system identifies zones likely to become bottlenecks.
+
+Step 7 — Optimise
+
+Density-aware routing calculates safer alternatives.
+
+Step 8 — Act
+
+The system produces recommended rerouting decisions for operators and, eventually, digital signage/guidance systems.
+
+
+---
+
+🏆 Why This Approach?
+
+Many basic crowd-management systems stop at:
+
+Detect people
+     ↓
+Count people
+     ↓
+Raise alert
+
+This project aims to close the loop:
+
+Detect
+  ↓
+Understand
+  ↓
+Simulate
+  ↓
+Predict
+  ↓
+Optimise
+  ↓
+Reroute
+  ↓
+Measure outcome
+
+That changes the system from a reactive monitoring tool into a predictive crowd-flow optimisation platform.
+
+
+---
+
+🏁 Example F1 Scenario
+
+Imagine thousands of spectators leaving a grandstand immediately after an F1 race.
+
+Grandstand
+    │
+    ▼
+Junction
+    │
+    ▼
+Choke Point ─────── Exit A
+    │
+    └─────────────── Exit B
+
+The system detects rising inflow toward the choke point.
+
+Without intervention
+
+Density
+  ↑
+  │                ███████
+  │          █████████████
+  │    ███████████████████
+  └────────────────────────→ Time
+
+             🚨 CRITICAL
+
+With prediction + rerouting
+
+The system predicts the bottleneck early and diverts part of the incoming crowd toward Exit B.
+
+Incoming Crowd
+       │
+       ├──────────► Exit A
+       │
+       └──────────► Exit B
+                    ↑
+              Dynamic routing
+
+The objective is to reduce peak density, distribute crowd flow, and prevent the bottleneck from becoming dangerous.
+
+
+---
+
+🔬 Planned Hackathon Enhancements
+
+The current engine is the foundation. The next development stages are:
+
+Phase 1 — Real CV → Digital Twin Integration
+
+YOLO Tracking
+      ↓
+Camera calibration / homography
+      ↓
+Venue coordinates
+      ↓
+Zone-level crowd state
+      ↓
+Digital Twin
+
+Phase 2 — Stronger Forecasting
+
+Add multi-step forecasting for:
+
+T+5 min
+T+10 min
+T+15 min
+
+with uncertainty/confidence estimates.
+
+Phase 3 — Smarter Rerouting
+
+Add:
+
+Rerouting hysteresis
+
+Route-change cooldowns
+
+Flow balancing
+
+Exit capacity constraints
+
+Predicted rather than only current congestion
+
+
+Phase 4 — Command Centre
+
+Build a unified dashboard containing:
+
+Live venue digital twin
+
+Crowd heatmap
+
+Bottleneck alerts
+
+Forecast timeline
+
+Recommended routes
+
+System KPIs
+
+
+Phase 5 — What-if Simulation
+
+Allow operators to test:
+
++1000 arriving people
+Gate closure
+Emergency at zone X
+Unexpected crowd surge
+
+and compare outcomes before taking action.
+
+Phase 6 — Emergency Evacuation
+
+Support emergency mode with:
+
+Safe-exit selection
+
+Incoming-flow suppression
+
+Evacuation route optimisation
+
+Capacity-aware exit distribution
+
+
+
+---
+
+📈 Evaluation Metrics
+
+The system should ultimately be evaluated using measurable outcomes:
+
+Metric	Goal
+
+Peak zone density	↓
+Average travel time	↓
+Critical bottleneck duration	↓
+Prediction MAE	↓
+Bottleneck warning lead time	↑
+Successful reroutes	↑
+Evacuation completion time	↓
+Crowd distribution imbalance	↓
+
+
+The goal is not simply to detect congestion, but to demonstrate that prediction + intervention improves crowd flow.
+
+
+---
+
+🤗 Hugging Face
+
+The hackathon requires Hugging Face to be used in the build.
+
+The architecture is designed to support Hugging Face-hosted models for learned components such as:
+
+Crowd-flow forecasting
+
+Event/context understanding
+
+Future multimodal/vision models
+
+Model evaluation and experimentation
+
+
+The final implementation should explicitly integrate a Hugging Face model into the prediction/decision pipeline rather than treating Hugging Face only as a dependency.
+
+
+---
+
+🛠 Tech Stack
+
+Computer Vision
+
+Python
+
+YOLOv8 / Ultralytics
+
+OpenCV
+
+NumPy
+
+
+Crowd Intelligence
+
+Python
+
+Graph-based modelling
+
+Capacity-constrained simulation
+
+Density-aware A*
+
+Forecasting
+
+
+Backend
+
+FastAPI
+
+Pydantic
+
+Uvicorn
+
+
+Visualisation
+
+Gradio
+
+Plotly
+
+OpenCV
+
+
+AI / ML
+
+Hugging Face
+
+Machine Learning
+
+Time-series forecasting
+
+Computer Vision
+
+
+Testing
+
+Pytest
+
+
+
+---
+
+📁 Repository Structure
+
+Crowd-Management-system/
 │
-├── Crowd Behaviour Analysis/
+├── CROWD ALERT SYSTEM
+├── GRID DENSITY MAPPER
+├── Temple route planner
+├── crowd behaviour analysis
 │
-├── Crowd Alert System/
+├── grandprix/
+│   ├── __init__.py
+│   ├── api.py
+│   ├── core.py
+│   └── demo.py
 │
-├── Crowd Density Mapper/
+├── tests/
+│   └── test_grandprix.py
 │
-├── Temple Crowd Lane Management/
-│
-├── README.md
-│
-├── requirements.txt
-│
-└── assets/
-```
+├── GRANDPRIX_ENGINE.md
+├── requirements-grandprix.txt
+└── README.md
+
 
 ---
 
-# ⚙ Installation
+🎯 Objectives
 
-Clone the repository
+The system aims to:
 
-```bash
-git clone https://github.com/yourusername/Temple-Crowd-Management-System.git
-```
+Prevent dangerous crowd congestion
 
-Move into the project directory
+Predict bottlenecks before they become critical
 
-```bash
-cd Temple-Crowd-Management-System
-```
+Improve crowd distribution
 
-Install dependencies
+Reduce unnecessary travel time
 
-```bash
-pip install -r requirements.txt
-```
+Assist event-control teams
 
-Run the application
+Provide dynamic rerouting recommendations
 
-```bash
-python app.py
-```
+Support emergency evacuation
+
+Turn raw CCTV observations into actionable crowd-flow intelligence
+
+
 
 ---
 
-# 📊 Workflow
+👨‍💻 Author
 
-1. Upload CCTV or surveillance video.
-2. Detect and track people using YOLOv8.
-3. Analyze crowd movement and behaviour.
-4. Measure crowd density.
-5. Detect overcrowded regions.
-6. Generate alerts if thresholds are exceeded.
-7. Recommend the safest exit route.
-8. Display results through an interactive dashboard.
+Himanshu Pathak
 
----
+B.Tech — Computer Science & Engineering
 
-# 📈 Applications
+GitHub:
 
-- Temples
-- Religious Festivals
-- Railway Stations
-- Bus Terminals
-- Shopping Malls
-- Stadiums
-- Concerts
-- Political Rallies
-- Smart Cities
-- Airports
-- Tourist Attractions
+https://github.com/HimanshuPathak2725
+
 
 ---
 
-# 🔮 Future Enhancements
+📜 License
 
-- Live CCTV Integration
-- Mobile Application
-- Multi-Camera Support
-- Cloud Deployment
-- Face Recognition (Authorized Personnel)
-- Weather-aware Crowd Prediction
-- Drone-based Crowd Monitoring
-- IoT Sensor Integration
-- Emergency SMS Notifications
-- Predictive Crowd Analytics
+This project is currently developed as a hackathon/research prototype.
+
+See the repository for licensing information and third-party dependency notices.
+
 
 ---
 
-# 📸 Sample Outputs
+⭐ Project Vision
 
-- Crowd Detection
-- Person Tracking
-- Density Heatmaps
-- Route Recommendation Dashboard
-- Crowd Alert Dashboard
+> Don't wait for the crowd to become dangerous. Predict where it will happen, simulate the consequences, and reroute people before the bottleneck forms.
 
-(Add screenshots inside the `/assets` folder.)
 
----
 
-# 🎯 Objectives
-
-- Prevent crowd congestion and stampedes
-- Improve public safety
-- Assist authorities with real-time monitoring
-- Enable intelligent crowd management
-- Provide safe evacuation guidance
-
----
-
-# 👨‍💻 Authors
-
-**Your Name**
-
-B.Tech Final Year Project
-
-Department of Artificial Intelligence & Machine Learning
-
----
-
-# ⭐ Acknowledgements
-
-This project uses the following open-source technologies:
-
-- Ultralytics YOLOv8
-- OpenCV
-- Gradio
-- Plotly
-- NumPy
-- Pandas
-- Google Text-to-Speech
-
----
-
-## 📜 License
-
-This project is developed for educational and research purposes.
+🏁 From crowd detection → to crowd intelligence → to crowd-flow optimisation.
