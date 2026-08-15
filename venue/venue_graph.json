@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "name": "GrandPrix City Circuit - Spectator Venue",
+    "description": "Synthetic venue graph used to demo the digital twin. Coordinates are in an abstract 0-1000 x 0-600 canvas space, not real GPS.",
+    "density_los_thresholds_ppl_per_sqm": {
+      "comfortable": 1.0,
+      "congested": 2.0,
+      "at_risk": 3.0,
+      "crush_risk": 4.0
+    }
+  },
+  "zones": [
+    { "id": "gate_a",        "name": "Gate A (North Entry)",   "x": 80,  "y": 80,  "area_sqm": 600,  "capacity": 1800, "type": "entry"  },
+    { "id": "gate_b",        "name": "Gate B (South Entry)",   "x": 80,  "y": 520, "area_sqm": 600,  "capacity": 1800, "type": "entry"  },
+    { "id": "concourse_1",   "name": "North Concourse",        "x": 280, "y": 150, "area_sqm": 1200, "capacity": 3600, "type": "concourse" },
+    { "id": "concourse_2",   "name": "South Concourse",        "x": 280, "y": 450, "area_sqm": 1200, "capacity": 3600, "type": "concourse" },
+    { "id": "food_court",    "name": "Food Court",             "x": 480, "y": 300, "area_sqm": 900,  "capacity": 2700, "type": "amenity" },
+    { "id": "grandstand_n",  "name": "Grandstand North (Turn 1)", "x": 700, "y": 120, "area_sqm": 2000, "capacity": 8000, "type": "viewing" },
+    { "id": "grandstand_s",  "name": "Grandstand South (Turn 3)", "x": 700, "y": 480, "area_sqm": 2000, "capacity": 8000, "type": "viewing" },
+    { "id": "paddock_club",  "name": "Paddock Club (Straight)",   "x": 700, "y": 300, "area_sqm": 800,  "capacity": 1600, "type": "viewing" },
+    { "id": "merch_zone",    "name": "Merchandise Plaza",       "x": 480, "y": 550, "area_sqm": 700,  "capacity": 2100, "type": "amenity" },
+    { "id": "exit_1",        "name": "Exit 1 (North)",          "x": 900, "y": 120, "area_sqm": 500,  "capacity": 2400, "type": "exit" },
+    { "id": "exit_2",        "name": "Exit 2 (Main)",           "x": 900, "y": 300, "area_sqm": 700,  "capacity": 3000, "type": "exit" },
+    { "id": "exit_3",        "name": "Exit 3 (South)",          "x": 900, "y": 480, "area_sqm": 500,  "capacity": 2400, "type": "exit" }
+  ],
+  "edges": [
+    { "from": "gate_a",      "to": "concourse_1",  "width_m": 10, "length_m": 60,  "capacity_ppl_per_min": 800 },
+    { "from": "gate_b",      "to": "concourse_2",  "width_m": 10, "length_m": 60,  "capacity_ppl_per_min": 800 },
+    { "from": "concourse_1", "to": "food_court",   "width_m": 8,  "length_m": 90,  "capacity_ppl_per_min": 640 },
+    { "from": "concourse_2", "to": "food_court",   "width_m": 8,  "length_m": 90,  "capacity_ppl_per_min": 640 },
+    { "from": "concourse_1", "to": "grandstand_n", "width_m": 9,  "length_m": 160, "capacity_ppl_per_min": 720 },
+    { "from": "concourse_2", "to": "grandstand_s", "width_m": 9,  "length_m": 160, "capacity_ppl_per_min": 720 },
+    { "from": "food_court",  "to": "paddock_club", "width_m": 6,  "length_m": 100, "capacity_ppl_per_min": 480 },
+    { "from": "food_court",  "to": "merch_zone",   "width_m": 6,  "length_m": 100, "capacity_ppl_per_min": 480 },
+    { "from": "grandstand_n","to": "paddock_club", "width_m": 5,  "length_m": 140, "capacity_ppl_per_min": 400 },
+    { "from": "grandstand_s","to": "paddock_club", "width_m": 5,  "length_m": 140, "capacity_ppl_per_min": 400 },
+    { "from": "grandstand_n","to": "exit_1",       "width_m": 8,  "length_m": 70,  "capacity_ppl_per_min": 640 },
+    { "from": "paddock_club","to": "exit_2",       "width_m": 8,  "length_m": 70,  "capacity_ppl_per_min": 640 },
+    { "from": "grandstand_s","to": "exit_3",       "width_m": 8,  "length_m": 70,  "capacity_ppl_per_min": 640 },
+    { "from": "merch_zone",  "to": "exit_3",       "width_m": 6,  "length_m": 90,  "capacity_ppl_per_min": 480 }
+  ]
+}

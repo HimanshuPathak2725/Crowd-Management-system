@@ -1,0 +1,4 @@
+# Optional dependency set for the live CCTV/AI perception panel.
+# The digital-twin dashboard itself remains runnable without these packages.
+opencv-python-headless>=4.9
+ultralytics>=8.3,<9

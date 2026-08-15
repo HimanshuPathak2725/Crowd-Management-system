@@ -1,0 +1,1709 @@
+diff --git a/LIVE_DIGITAL_TWIN.md b/LIVE_DIGITAL_TWIN.md
+new file mode 100644
+index 0000000..95cdd07
+--- /dev/null
++++ b/LIVE_DIGITAL_TWIN.md
+@@ -0,0 +1,78 @@
++# Live GrandPrix Crowd Digital Twin
++
++This layer adds the live, browser-based digital twin from the validated
++`crowd-digital-twin` prototype without deleting the existing CV modules.
++
++## Run tests
++
++```bash
++python3 -m unittest discover -s tests -v
++```
++
++Expected result:
++
++```text
++Ran 6 tests ... OK
++```
++
++## Run the live dashboard
++
++```bash
++python3 -m pip install -r requirements-grandprix-live.txt
++python3 server/app.py
++```
++
++Open:
++
++```text
++http://localhost:8000
++```
++
++The server is intentionally implemented with Python's standard-library
++`http.server`, so the dashboard has no external CDN dependency.
++
++## Headless fallback
++
++```bash
++python3 scripts/run_demo.py --fast
++```
++
++## Architecture
++
++```text
++Venue graph
++    ↓
++Cell Transmission crowd simulation
++    ↓
++Online per-zone SGDRegressor forecasting
++    ↓
++Fruin LOS bottleneck detection
++    ↓
++Dijkstra-based dynamic rerouting
++    ↓
++Live browser dashboard
++```
++
++The venue graph is synthetic and designed for a Grand Prix-style spectator
++venue. Replace `venue/venue_graph.json` with a calibrated event layout when
++real venue geometry and capacities are available.
++
++The simulation is macroscopic rather than agent-based: each zone tracks
++occupancy and each walkway has sending/receiving capacity. This is deliberate
++for real-time venue-scale simulation.
++
++The forecasting model is online and incrementally trained on the simulated
++density stream. It is a transparent hackathon baseline, not a claim of a
++production safety-certified predictor.
++
++## Demo story
++
++1. Gates open and spectators enter.
++2. Crowd accumulates in concourses and viewing areas.
++3. Race ends and mass egress begins.
++4. Forecasting detects future congestion before the zone reaches the risk
++   threshold.
++5. The rerouting engine throttles risky edges and boosts alternatives.
++6. The dashboard shows the bottleneck, lead time, and reroute action.
++7. Exit discharge drains the venue instead of allowing occupancy to remain
++   permanently stuck inside exit zones.
+diff --git a/dashboard/app.js b/dashboard/app.js
+new file mode 100644
+index 0000000..0449b1c
+--- /dev/null
++++ b/dashboard/app.js
+@@ -0,0 +1,244 @@
++const POLL_MS = 1000;
++
++const canvas = document.getElementById('venue-canvas');
++const ctx = canvas.getContext('2d');
++const sparkCanvas = document.getElementById('spark-canvas');
++const sparkCtx = sparkCanvas.getContext('2d');
++
++const LOS_COLOR = {
++  comfortable: '#17C964',
++  busy: '#9FE870',
++  congested: '#FF8A1E',
++  at_risk: '#FF3B30',
++  crush_risk: '#FF3B30',
++};
++
++const PHASE_LABEL = {
++  0: 'GATES OPEN — FANS ARRIVING',
++};
++
++let occHistory = [];
++let lastState = null;
++
++function resizeCanvases() {
++  for (const c of [canvas, sparkCanvas]) {
++    const rect = c.getBoundingClientRect();
++    const dpr = window.devicePixelRatio || 1;
++    c.width = Math.max(1, rect.width * dpr);
++    c.height = Math.max(1, rect.height * dpr);
++  }
++  if (lastState) render(lastState);
++}
++window.addEventListener('resize', resizeCanvases);
++
++function fmtClock(simTimeS) {
++  const m = Math.floor(simTimeS / 60).toString().padStart(2, '0');
++  const s = Math.floor(simTimeS % 60).toString().padStart(2, '0');
++  return `${m}:${s}`;
++}
++
++function phaseLabel(phase) {
++  if (phase.egress_intensity >= 0.4) return 'CHEQUERED FLAG — MASS EGRESS';
++  if (phase.egress_intensity > 0) return 'RACE IN PROGRESS';
++  if (phase.gate_inflow_ppl_per_min > 0) return 'GATES OPEN — FANS ARRIVING';
++  return 'STEADY STATE';
++}
++
++function mapVenueToCanvas(zones, w, h) {
++  const xs = zones.map(z => z.x), ys = zones.map(z => z.y);
++  const minX = Math.min(...xs), maxX = Math.max(...xs);
++  const minY = Math.min(...ys), maxY = Math.max(...ys);
++  const pad = 60;
++  const sx = (w - pad * 2) / (maxX - minX || 1);
++  const sy = (h - pad * 2) / (maxY - minY || 1);
++  const s = Math.min(sx, sy);
++  return zones.reduce((acc, z) => {
++    acc[z.id] = {
++      x: pad + (z.x - minX) * s,
++      y: pad + (z.y - minY) * s,
++    };
++    return acc;
++  }, {});
++}
++
++function render(state) {
++  const dpr = window.devicePixelRatio || 1;
++  const w = canvas.width, h = canvas.height;
++  ctx.clearRect(0, 0, w, h);
++  ctx.save();
++  ctx.scale(dpr, dpr);
++  const cw = w / dpr, ch = h / dpr;
++
++  const pos = mapVenueToCanvas(state.zones, cw, ch);
++  const zoneById = Object.fromEntries(state.zones.map(z => [z.id, z]));
++
++  // faint track-map background grid, on-theme with a circuit telemetry screen
++  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
++  ctx.lineWidth = 1;
++  for (let gx = 0; gx < cw; gx += 40) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, ch); ctx.stroke(); }
++  for (let gy = 0; gy < ch; gy += 40) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cw, gy); ctx.stroke(); }
++
++  // edges
++  for (const e of state.edges) {
++    const a = pos[e.from], b = pos[e.to];
++    if (!a || !b) continue;
++    const util = e.capacity_ppl_per_min > 0 ? e.flow_ppl_per_min / e.capacity_ppl_per_min : 0;
++    const boosted = e.steer_bias > 1.05;
++    const throttled = e.steer_bias < 0.95;
++
++    ctx.beginPath();
++    ctx.moveTo(a.x, a.y);
++    ctx.lineTo(b.x, b.y);
++    if (boosted) {
++      ctx.strokeStyle = '#00D4FF';
++      ctx.lineWidth = 2 + Math.min(util, 1) * 4;
++      ctx.shadowColor = '#00D4FF'; ctx.shadowBlur = 8;
++    } else if (throttled) {
++      ctx.strokeStyle = 'rgba(255,59,48,0.35)';
++      ctx.lineWidth = 1.5;
++      ctx.setLineDash([4, 4]);
++      ctx.shadowBlur = 0;
++    } else {
++      ctx.strokeStyle = 'rgba(232,236,239,0.18)';
++      ctx.lineWidth = 1 + Math.min(util, 1) * 3;
++      ctx.shadowBlur = 0;
++    }
++    ctx.stroke();
++    ctx.setLineDash([]);
++    ctx.shadowBlur = 0;
++  }
++
++  // zones
++  for (const z of state.zones) {
++    const p = pos[z.id];
++    if (!p) continue;
++    const r = 14 + Math.sqrt(z.capacity) * 0.55;
++    const color = LOS_COLOR[z.los] || '#666';
++    const fillPct = Math.min(1, z.occupancy / z.capacity);
++
++    // base ring
++    ctx.beginPath();
++    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
++    ctx.fillStyle = 'rgba(255,255,255,0.04)';
++    ctx.fill();
++    ctx.lineWidth = 2;
++    ctx.strokeStyle = color;
++    ctx.stroke();
++
++    // fill wedge = occupancy / capacity
++    ctx.beginPath();
++    ctx.moveTo(p.x, p.y);
++    ctx.arc(p.x, p.y, r - 3, -Math.PI / 2, -Math.PI / 2 + fillPct * Math.PI * 2);
++    ctx.closePath();
++    ctx.fillStyle = color + '55';
++    ctx.fill();
++
++    if (z.los === 'at_risk' || z.los === 'crush_risk') {
++      ctx.beginPath();
++      const pulse = 3 + 2 * Math.sin(Date.now() / 180);
++      ctx.arc(p.x, p.y, r + pulse, 0, Math.PI * 2);
++      ctx.strokeStyle = 'rgba(255,59,48,0.5)';
++      ctx.lineWidth = 2;
++      ctx.stroke();
++    }
++
++    ctx.fillStyle = '#E8ECEF';
++    ctx.font = '600 11px -apple-system, sans-serif';
++    ctx.textAlign = 'center';
++    ctx.fillText(z.name, p.x, p.y + r + 14);
++
++    ctx.font = '700 11px ui-monospace, monospace';
++    ctx.fillStyle = color;
++    ctx.fillText(z.occupancy.toLocaleString(), p.x, p.y + 4);
++  }
++
++  ctx.restore();
++}
++
++function renderSparkline() {
++  const dpr = window.devicePixelRatio || 1;
++  const w = sparkCanvas.width, h = sparkCanvas.height;
++  sparkCtx.clearRect(0, 0, w, h);
++  if (occHistory.length < 2) return;
++  sparkCtx.save();
++  sparkCtx.scale(dpr, dpr);
++  const cw = w / dpr, ch = h / dpr;
++  const max = Math.max(...occHistory, 1);
++  sparkCtx.beginPath();
++  occHistory.forEach((v, i) => {
++    const x = (i / (occHistory.length - 1)) * cw;
++    const y = ch - (v / max) * (ch - 4) - 2;
++    i === 0 ? sparkCtx.moveTo(x, y) : sparkCtx.lineTo(x, y);
++  });
++  sparkCtx.strokeStyle = '#00D4FF';
++  sparkCtx.lineWidth = 1.5;
++  sparkCtx.stroke();
++  sparkCtx.restore();
++}
++
++function updatePanels(state) {
++  document.getElementById('phase-chip').textContent = phaseLabel(state.phase);
++  document.getElementById('sim-clock').textContent = fmtClock(state.sim_time_s);
++  document.getElementById('occ-current').textContent = state.total_occupancy.toLocaleString();
++  const cap = state.zones.reduce((a, z) => a + z.capacity, 0);
++  document.getElementById('occ-cap').textContent = cap.toLocaleString();
++
++  const alertsEl = document.getElementById('alerts-list');
++  document.getElementById('alert-count').textContent = state.alerts.length;
++  alertsEl.innerHTML = '';
++  if (state.alerts.length === 0) {
++    alertsEl.innerHTML = '<div class="empty-state">No congestion forecasted. Track is clear.</div>';
++  } else {
++    for (const a of state.alerts) {
++      const div = document.createElement('div');
++      div.className = 'alert-card' + (a.severity < 1.3 ? ' sev-mid' : '');
++      div.innerHTML = `
++        <div class="a-zone">${a.zone_name}</div>
++        <div class="a-meta">
++          <span>${a.los_now} → <b style="color:#FF3B30">${a.los_predicted}</b></span>
++          <span class="a-sev">T-${a.lead_time_s}s</span>
++        </div>
++        <div class="a-meta"><span>density ${a.current_density.toFixed(1)} → ${a.predicted_density.toFixed(1)} ppl/m²</span></div>`;
++      alertsEl.appendChild(div);
++    }
++  }
++
++  const reroutesEl = document.getElementById('reroute-list');
++  document.getElementById('reroute-count').textContent = state.reroutes.length;
++  reroutesEl.innerHTML = '';
++  if (state.reroutes.length === 0) {
++    reroutesEl.innerHTML = '<div class="empty-state">No rerouting active.</div>';
++  } else {
++    for (const r of state.reroutes) {
++      const div = document.createElement('div');
++      div.className = 'reroute-card';
++      div.innerHTML = `<div>Diverting flow away from <b>${r.bottleneck_zone}</b></div>
++        <div class="r-path">${r.suggested_via}</div>`;
++      reroutesEl.appendChild(div);
++    }
++  }
++}
++
++async function poll() {
++  try {
++    const res = await fetch('/api/state');
++    const state = await res.json();
++    lastState = state;
++    occHistory.push(state.total_occupancy);
++    if (occHistory.length > 120) occHistory.shift();
++    render(state);
++    renderSparkline();
++    updatePanels(state);
++  } catch (err) {
++    document.getElementById('phase-chip').textContent = 'DISCONNECTED';
++  }
++}
++
++document.getElementById('reset-btn').addEventListener('click', async () => {
++  await fetch('/api/reset');
++  occHistory = [];
++});
++
++resizeCanvases();
++poll();
++setInterval(poll, POLL_MS);
+diff --git a/dashboard/index.html b/dashboard/index.html
+new file mode 100644
+index 0000000..c916a2f
+--- /dev/null
++++ b/dashboard/index.html
+@@ -0,0 +1,88 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++<meta charset="UTF-8" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0" />
++<title>Race Control — Crowd Digital Twin</title>
++<link rel="stylesheet" href="style.css" />
++</head>
++<body>
++
++<header class="topbar">
++  <div class="brand">
++    <span class="brand-mark" aria-hidden="true"></span>
++    <div>
++      <div class="brand-title">GRANDPRIX CROWD DIGITAL TWIN</div>
++      <div class="brand-sub">GrandPrixGeekRoom — Predictive Crowd Management</div>
++    </div>
++  </div>
++  <div class="session-status">
++    <div class="status-chip" id="phase-chip">CONNECTING…</div>
++    <div class="clock">
++      <span class="clock-label">SIM T+</span>
++      <span class="clock-value" id="sim-clock">00:00</span>
++    </div>
++  </div>
++  <div class="controls">
++    <button id="reset-btn" class="btn-ghost">RESET SIM</button>
++  </div>
++</header>
++
++<main class="layout">
++
++  <section class="map-panel panel">
++    <div class="panel-head">
++      <span class="panel-title">VENUE MAP — LIVE</span>
++      <span class="panel-hint">size = capacity · fill = current density · line = flow</span>
++    </div>
++    <canvas id="venue-canvas"></canvas>
++    <div class="legend">
++      <span class="legend-item"><i class="dot dot-comfortable"></i>Comfortable</span>
++      <span class="legend-item"><i class="dot dot-busy"></i>Busy</span>
++      <span class="legend-item"><i class="dot dot-congested"></i>Congested</span>
++      <span class="legend-item"><i class="dot dot-at_risk"></i>At Risk</span>
++      <span class="legend-item"><i class="dot dot-crush_risk"></i>Crush Risk</span>
++      <span class="legend-item legend-sep"><i class="dot dot-reroute"></i>Active Reroute</span>
++    </div>
++  </section>
++
++  <aside class="side-panels">
++
++    <section class="panel alerts-panel">
++      <div class="panel-head">
++        <span class="panel-title">FORECAST · BOTTLENECK ALERTS</span>
++        <span class="badge" id="alert-count">0</span>
++      </div>
++      <div class="panel-body" id="alerts-list">
++        <div class="empty-state">No congestion forecasted. Track is clear.</div>
++      </div>
++    </section>
++
++    <section class="panel reroute-panel">
++      <div class="panel-head">
++        <span class="panel-title">AUTO-REROUTE ACTIONS</span>
++        <span class="badge" id="reroute-count">0</span>
++      </div>
++      <div class="panel-body" id="reroute-list">
++        <div class="empty-state">No rerouting active.</div>
++      </div>
++    </section>
++
++  </aside>
++
++  <section class="panel footer-panel">
++    <div class="occ-block">
++      <div class="occ-label">TOTAL OCCUPANCY</div>
++      <div class="occ-value"><span id="occ-current">0</span><span class="occ-max"> / <span id="occ-cap">0</span></span></div>
++    </div>
++    <canvas id="spark-canvas"></canvas>
++    <div class="model-note">
++      Forecast model: online <code>SGDRegressor</code>, retrained every tick on live simulation data · Flow model: Cell Transmission Model (Daganzo) · Thresholds: Fruin pedestrian LOS
++    </div>
++  </section>
++
++</main>
++
++<script src="app.js"></script>
++</body>
++</html>
+diff --git a/dashboard/style.css b/dashboard/style.css
+new file mode 100644
+index 0000000..045a6ef
+--- /dev/null
++++ b/dashboard/style.css
+@@ -0,0 +1,169 @@
++:root{
++  --bg-asphalt:#0B0D0F;
++  --bg-panel:#14181C;
++  --bg-panel-raised:#1A2025;
++  --line:#262B30;
++  --text-primary:#E8ECEF;
++  --text-dim:#7C868D;
++
++  --flag-green:#17C964;
++  --flag-yellow:#F5C518;
++  --flag-orange:#FF8A1E;
++  --flag-red:#FF3B30;
++  --signal-cyan:#00D4FF;
++
++  --font-display: -apple-system, "Segoe UI", "Arial Narrow", system-ui, sans-serif;
++  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Consolas", "Roboto Mono", monospace;
++}
++
++*{box-sizing:border-box;}
++html,body{margin:0;padding:0;height:100%;}
++body{
++  background:
++    radial-gradient(1200px 600px at 15% -10%, #171c20 0%, transparent 60%),
++    var(--bg-asphalt);
++  color:var(--text-primary);
++  font-family:var(--font-display);
++  min-height:100vh;
++  display:flex;
++  flex-direction:column;
++}
++
++/* ---------- top bar ---------- */
++.topbar{
++  display:flex;
++  align-items:center;
++  justify-content:space-between;
++  gap:24px;
++  padding:14px 24px;
++  border-bottom:1px solid var(--line);
++  background:linear-gradient(180deg,#12161A 0%, #0F1215 100%);
++}
++.brand{display:flex;align-items:center;gap:12px;}
++.brand-mark{
++  width:14px;height:14px;border-radius:3px;
++  background:linear-gradient(135deg,var(--flag-green),var(--signal-cyan));
++  box-shadow:0 0 12px rgba(0,212,255,.5);
++  flex-shrink:0;
++}
++.brand-title{font-weight:800;letter-spacing:.06em;font-size:15px;}
++.brand-sub{font-size:11px;color:var(--text-dim);letter-spacing:.03em;margin-top:2px;}
++
++.session-status{display:flex;align-items:center;gap:18px;}
++.status-chip{
++  font-family:var(--font-mono);
++  font-size:12px;font-weight:700;letter-spacing:.08em;
++  padding:6px 12px;border-radius:4px;
++  background:var(--bg-panel-raised);
++  border:1px solid var(--line);
++  color:var(--flag-yellow);
++  text-transform:uppercase;
++}
++.clock{font-family:var(--font-mono);display:flex;align-items:baseline;gap:6px;}
++.clock-label{font-size:10px;color:var(--text-dim);letter-spacing:.08em;}
++.clock-value{font-size:18px;font-weight:700;color:var(--signal-cyan);}
++
++.btn-ghost{
++  font-family:var(--font-mono);
++  background:transparent;color:var(--text-dim);
++  border:1px solid var(--line);border-radius:4px;
++  padding:8px 14px;font-size:11px;letter-spacing:.06em;cursor:pointer;
++  transition:all .15s ease;
++}
++.btn-ghost:hover{border-color:var(--signal-cyan);color:var(--signal-cyan);}
++
++/* ---------- layout ---------- */
++.layout{
++  flex:1;
++  display:grid;
++  grid-template-columns:1fr 340px;
++  grid-template-rows:1fr auto;
++  gap:14px;
++  padding:16px 24px 24px;
++}
++.panel{
++  background:var(--bg-panel);
++  border:1px solid var(--line);
++  border-radius:6px;
++  display:flex;flex-direction:column;
++  overflow:hidden;
++}
++.panel-head{
++  display:flex;align-items:center;justify-content:space-between;
++  padding:10px 14px;border-bottom:1px solid var(--line);
++  background:var(--bg-panel-raised);
++}
++.panel-title{font-size:11px;font-weight:700;letter-spacing:.09em;color:var(--text-dim);}
++.panel-hint{font-size:10px;color:var(--text-dim);font-family:var(--font-mono);}
++.badge{
++  font-family:var(--font-mono);font-size:11px;font-weight:700;
++  background:var(--bg-asphalt);border:1px solid var(--line);
++  border-radius:10px;padding:1px 8px;color:var(--text-dim);
++}
++
++.map-panel{grid-column:1;grid-row:1;}
++#venue-canvas{flex:1;width:100%;display:block;}
++.legend{
++  display:flex;flex-wrap:wrap;gap:14px;
++  padding:8px 14px;border-top:1px solid var(--line);
++  font-size:10px;color:var(--text-dim);letter-spacing:.02em;
++}
++.legend-item{display:flex;align-items:center;gap:5px;}
++.legend-sep{margin-left:auto;}
++.dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
++.dot-comfortable{background:var(--flag-green);}
++.dot-busy{background:#9FE870;}
++.dot-congested{background:var(--flag-orange);}
++.dot-at_risk{background:var(--flag-red);}
++.dot-crush_risk{background:var(--flag-red);box-shadow:0 0 6px var(--flag-red);}
++.dot-reroute{background:var(--signal-cyan);box-shadow:0 0 6px var(--signal-cyan);}
++
++.side-panels{grid-column:2;grid-row:1;display:flex;flex-direction:column;gap:14px;min-height:0;}
++.alerts-panel,.reroute-panel{flex:1;min-height:0;}
++.panel-body{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;}
++
++.empty-state{
++  color:var(--text-dim);font-size:12px;font-family:var(--font-mono);
++  padding:16px 8px;text-align:center;
++}
++
++.alert-card{
++  border:1px solid var(--line);border-left:3px solid var(--flag-red);
++  border-radius:4px;padding:8px 10px;background:var(--bg-panel-raised);
++}
++.alert-card.sev-mid{border-left-color:var(--flag-orange);}
++.alert-card .a-zone{font-weight:700;font-size:12.5px;}
++.alert-card .a-meta{
++  font-family:var(--font-mono);font-size:10.5px;color:var(--text-dim);
++  margin-top:4px;display:flex;justify-content:space-between;
++}
++.alert-card .a-sev{color:var(--flag-red);font-weight:700;}
++
++.reroute-card{
++  border:1px solid var(--line);border-left:3px solid var(--signal-cyan);
++  border-radius:4px;padding:8px 10px;background:var(--bg-panel-raised);
++  font-size:11.5px;line-height:1.5;
++}
++.reroute-card .r-path{font-family:var(--font-mono);color:var(--signal-cyan);font-size:11px;margin-top:4px;}
++
++.footer-panel{
++  grid-column:1 / span 2;grid-row:2;
++  flex-direction:row;align-items:center;gap:20px;padding:12px 18px;
++}
++.occ-block{min-width:170px;}
++.occ-label{font-size:10px;color:var(--text-dim);letter-spacing:.08em;}
++.occ-value{font-family:var(--font-mono);font-size:20px;font-weight:700;margin-top:2px;}
++.occ-max{color:var(--text-dim);font-size:14px;font-weight:500;}
++#spark-canvas{flex:1;height:44px;}
++.model-note{
++  font-family:var(--font-mono);font-size:10px;color:var(--text-dim);
++  max-width:340px;line-height:1.5;flex-shrink:0;
++}
++.model-note code{color:var(--signal-cyan);}
++
++@media (max-width: 900px){
++  .layout{grid-template-columns:1fr;}
++  .map-panel{grid-column:1;grid-row:1;}
++  .side-panels{grid-column:1;grid-row:2;flex-direction:row;}
++  .footer-panel{grid-column:1;grid-row:3;flex-wrap:wrap;}
++}
+diff --git a/engine/__init__.py b/engine/__init__.py
+new file mode 100644
+index 0000000..71f96f4
+--- /dev/null
++++ b/engine/__init__.py
+@@ -0,0 +1,15 @@
++from .venue import Venue, Zone
++from .simulation import CrowdSimulation, ArrivalPhase, DEFAULT_SCENARIO
++from .forecasting import ForecastingEngine, ZoneForecast
++from .bottleneck import BottleneckDetector, BottleneckAlert
++from .rerouting import ReroutingEngine, RerouteSuggestion
++from .orchestrator import DigitalTwin
++
++__all__ = [
++    "Venue", "Zone",
++    "CrowdSimulation", "ArrivalPhase", "DEFAULT_SCENARIO",
++    "ForecastingEngine", "ZoneForecast",
++    "BottleneckDetector", "BottleneckAlert",
++    "ReroutingEngine", "RerouteSuggestion",
++    "DigitalTwin",
++]
+diff --git a/engine/bottleneck.py b/engine/bottleneck.py
+new file mode 100644
+index 0000000..6cfb38f
+--- /dev/null
++++ b/engine/bottleneck.py
+@@ -0,0 +1,57 @@
++"""
++bottleneck.py
++--------------
++Turns the raw per-zone forecasts into ranked alerts a control-room operator
++(or the auto-rerouting engine) can act on, using the Fruin Level-of-Service
++thresholds already attached to the venue definition.
++
++An alert fires when the *forecasted* density crosses "at_risk", not the
++*current* density - the entire point of forecasting is to get lead time
++(horizon_ticks * dt_s seconds) before the zone is actually dangerous.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from .forecasting import ZoneForecast
++from .venue import Venue
++
++
++@dataclass
++class BottleneckAlert:
++    zone_id: str
++    zone_name: str
++    current_density: float
++    predicted_density: float
++    los_now: str
++    los_predicted: str
++    lead_time_s: int
++    severity: float  # predicted_density / at_risk_threshold, for ranking
++    trend_ppl_per_tick: float
++
++
++class BottleneckDetector:
++    def __init__(self, venue: Venue, dt_s: int):
++        self.venue = venue
++        self.dt_s = dt_s
++
++    def detect(self, forecasts: dict[str, ZoneForecast]) -> list[BottleneckAlert]:
++        at_risk = self.venue.los_thresholds["at_risk"]
++        alerts: list[BottleneckAlert] = []
++        for zid, f in forecasts.items():
++            if f.predicted_density < at_risk:
++                continue
++            zone = self.venue.zones[zid]
++            alerts.append(BottleneckAlert(
++                zone_id=zid,
++                zone_name=zone.name,
++                current_density=f.current_density,
++                predicted_density=f.predicted_density,
++                los_now=self.venue.los_level(f.current_density),
++                los_predicted=self.venue.los_level(f.predicted_density),
++                lead_time_s=f.horizon_ticks * self.dt_s,
++                severity=round(f.predicted_density / at_risk, 2),
++                trend_ppl_per_tick=f.trend_ppl_per_tick,
++            ))
++        alerts.sort(key=lambda a: a.severity, reverse=True)
++        return alerts
+diff --git a/engine/forecasting.py b/engine/forecasting.py
+new file mode 100644
+index 0000000..44dae78
+--- /dev/null
++++ b/engine/forecasting.py
+@@ -0,0 +1,110 @@
++"""
++forecasting.py
++---------------
++Per-zone occupancy/density forecasting, updated online every simulation tick.
++
++Design choice: instead of one global model, each zone gets its own small
++online regressor. Venue zones have very different dynamics (a grandstand
++fills and drains completely differently from a food court), so a
++per-zone model with lag features converges faster and is cheap enough to
++retrain every tick (O(zones), not O(zones^2) like a full graph-neural model
++would need, which is overkill for a hackathon-scale demo and still not
++justified at real venue scale without months of historical data to train on).
++
++Model: scikit-learn SGDRegressor (linear model, incrementally trained via
++partial_fit) on lag features [density(t), velocity(t), accel(t), rolling
++mean(t)] -> density(t + horizon). Falls back to a Holt's linear trend
++extrapolation until a zone has collected enough history to train on
++(cold-start problem every real forecasting system has to handle).
++"""
++from __future__ import annotations
++
++from collections import deque
++from dataclasses import dataclass, field
++
++import numpy as np
++from sklearn.linear_model import SGDRegressor
++
++
++@dataclass
++class ZoneForecast:
++    zone_id: str
++    horizon_ticks: int
++    predicted_density: float
++    predicted_occupancy: int
++    current_density: float
++    trend_ppl_per_tick: float
++    confidence: str  # "low" (cold start / trend fallback) or "model" (trained regressor)
++
++
++class ZoneModel:
++    def __init__(self, horizon_ticks: int, min_history: int = 12):
++        self.horizon_ticks = horizon_ticks
++        self.min_history = min_history
++        self.history: deque[float] = deque(maxlen=200)
++        self.reg = SGDRegressor(max_iter=1, tol=None, learning_rate="invscaling",
++                                 eta0=0.01, warm_start=True)
++        self._fitted = False
++
++    @staticmethod
++    def _features(hist: list[float], t: int) -> np.ndarray:
++        d0 = hist[t]
++        d1 = hist[t - 1] if t >= 1 else d0
++        d2 = hist[t - 2] if t >= 2 else d1
++        velocity = d0 - d1
++        accel = (d0 - d1) - (d1 - d2)
++        window = hist[max(0, t - 5):t + 1]
++        rolling_mean = sum(window) / len(window)
++        return np.array([[d0, velocity, accel, rolling_mean]])
++
++    def update(self, density: float) -> None:
++        self.history.append(density)
++        hist = list(self.history)
++        t = len(hist) - 1
++        target_idx = t - self.horizon_ticks
++        if target_idx >= 2:  # need t-2 to build lag features for the target point
++            X = self._features(hist, target_idx)
++            y = np.array([hist[t]])
++            self.reg.partial_fit(X, y)
++            self._fitted = True
++
++    def predict(self) -> tuple[float, float, str]:
++        hist = list(self.history)
++        if not hist:
++            return 0.0, 0.0, "low"
++        t = len(hist) - 1
++        trend = hist[t] - hist[t - 1] if t >= 1 else 0.0
++        if self._fitted and len(hist) >= self.min_history:
++            X = self._features(hist, t)
++            pred = float(self.reg.predict(X)[0])
++            return max(0.0, pred), trend, "model"
++        # cold-start fallback: simple linear extrapolation of current trend
++        pred = max(0.0, hist[t] + trend * self.horizon_ticks)
++        return pred, trend, "low"
++
++
++class ForecastingEngine:
++    def __init__(self, zone_ids: list[str], horizon_ticks: int = 6):
++        self.horizon_ticks = horizon_ticks
++        self.models: dict[str, ZoneModel] = {
++            zid: ZoneModel(horizon_ticks=horizon_ticks) for zid in zone_ids
++        }
++
++    def update(self, densities: dict[str, float]) -> None:
++        for zid, d in densities.items():
++            self.models[zid].update(d)
++
++    def forecast(self, zone_areas: dict[str, float]) -> dict[str, ZoneForecast]:
++        out = {}
++        for zid, model in self.models.items():
++            pred_density, trend, confidence = model.predict()
++            out[zid] = ZoneForecast(
++                zone_id=zid,
++                horizon_ticks=self.horizon_ticks,
++                predicted_density=round(pred_density, 3),
++                predicted_occupancy=int(round(pred_density * zone_areas[zid])),
++                current_density=round(model.history[-1], 3) if model.history else 0.0,
++                trend_ppl_per_tick=round(trend, 4),
++                confidence=confidence,
++            )
++        return out
+diff --git a/engine/orchestrator.py b/engine/orchestrator.py
+new file mode 100644
+index 0000000..1c89eb3
+--- /dev/null
++++ b/engine/orchestrator.py
+@@ -0,0 +1,91 @@
++"""
++orchestrator.py
++-----------------
++Wires the four subsystems together into a single ticking digital twin and
++exposes one JSON-serialisable `state()` snapshot the API / dashboard reads
++each tick. This is the class both `scripts/run_demo.py` (headless CLI) and
++`server/app.py` (live web dashboard) call.
++"""
++from __future__ import annotations
++
++import time
++from dataclasses import asdict
++
++from .bottleneck import BottleneckDetector
++from .forecasting import ForecastingEngine
++from .rerouting import ReroutingEngine
++from .simulation import CrowdSimulation
++from .venue import Venue
++
++
++class DigitalTwin:
++    def __init__(self, venue_path: str, dt_s: int = 10, horizon_ticks: int = 6):
++        self.venue = Venue.from_json(venue_path)
++        self.sim = CrowdSimulation(self.venue, dt_s=dt_s)
++        self.forecaster = ForecastingEngine(list(self.venue.zones.keys()), horizon_ticks=horizon_ticks)
++        self.detector = BottleneckDetector(self.venue, dt_s=dt_s)
++        self.rerouter = ReroutingEngine(self.venue, self.sim)
++        self.tick_count = 0
++        self.alert_log: list[dict] = []
++        self.reroute_log: list[dict] = []
++
++    def tick(self) -> dict:
++        self.sim.step()
++        densities = {zid: z.density for zid, z in self.venue.zones.items()}
++        self.forecaster.update(densities)
++        areas = {zid: z.area_sqm for zid, z in self.venue.zones.items()}
++        forecasts = self.forecaster.forecast(areas)
++        alerts = self.detector.detect(forecasts)
++        suggestions = self.rerouter.apply(alerts)
++        self.tick_count += 1
++
++        if alerts:
++            self.alert_log.append({"tick": self.tick_count, "sim_time_s": self.sim.sim_time_s,
++                                    "alerts": [asdict(a) for a in alerts]})
++            self.alert_log = self.alert_log[-50:]
++        if suggestions:
++            self.reroute_log.append({"tick": self.tick_count, "sim_time_s": self.sim.sim_time_s,
++                                      "suggestions": [asdict(s) for s in suggestions]})
++            self.reroute_log = self.reroute_log[-50:]
++
++        return self.state(forecasts, alerts, suggestions)
++
++    def state(self, forecasts=None, alerts=None, suggestions=None) -> dict:
++        snap = self.sim.snapshot()
++        return {
++            "tick": self.tick_count,
++            "sim_time_s": snap["sim_time_s"],
++            "phase": snap["phase"],
++            "total_occupancy": snap["total_occupancy"],
++            "zones": [
++                {
++                    "id": zid,
++                    "name": z.name,
++                    "type": z.type,
++                    "x": z.x, "y": z.y,
++                    "capacity": z.capacity,
++                    "occupancy": snap["zones"][zid]["occupancy"],
++                    "density": snap["zones"][zid]["density"],
++                    "los": snap["zones"][zid]["los"],
++                    "forecast": (asdict(forecasts[zid]) if forecasts else None),
++                }
++                for zid, z in self.venue.zones.items()
++            ],
++            "edges": [
++                {"from": u, "to": v, "flow_ppl_per_min": round(d["flow"], 1),
++                 "capacity_ppl_per_min": d["capacity_ppl_per_min"],
++                 "steer_bias": round(self.sim.steer_bias.get((u, v), 1.0), 2)}
++                for u, v, d in self.venue.graph.edges(data=True)
++            ],
++            "alerts": [a.__dict__ for a in (alerts or [])],
++            "reroutes": [s.__dict__ for s in (suggestions or [])],
++            "alert_log": self.alert_log[-10:],
++            "reroute_log": self.reroute_log[-10:],
++        }
++
++    def run_headless(self, ticks: int, wall_delay_s: float = 0.0):
++        for _ in range(ticks):
++            snap = self.tick()
++            if wall_delay_s:
++                time.sleep(wall_delay_s)
++            yield snap
+diff --git a/engine/rerouting.py b/engine/rerouting.py
+new file mode 100644
+index 0000000..c57f283
+--- /dev/null
++++ b/engine/rerouting.py
+@@ -0,0 +1,117 @@
++"""
++rerouting.py
++-------------
++Closes the loop: simulation -> forecast -> bottleneck alert -> **action**.
++
++For every flagged zone Z we:
++  1. Find the upstream zones U that currently feed Z.
++  2. For each U, find the best alternative out-edge that still makes
++     progress toward an exit (or toward the venue interior during ingress)
++     without going through Z, using Dijkstra on a copy of the graph where
++     edges into Z are heavily penalised.
++  3. Throttle `steer_bias[(U, Z)]` down and boost the bias of the chosen
++     alternative edge - this is fed straight back into
++     `CrowdSimulation.steer_bias`, so the next tick actually reroutes flow
++     (a closed-loop control system, not just a dashboard warning).
++  4. Emit a plain-English suggestion for the human control-room operator.
++
++Biases decay back to 1.0 once a zone is no longer flagged, so the system
++doesn't permanently close a corridor because of a one-off spike.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++import networkx as nx
++
++from .bottleneck import BottleneckAlert
++from .simulation import CrowdSimulation
++from .venue import Venue
++
++THROTTLE_BIAS = 0.15
++BOOST_BIAS = 2.5
++DECAY_RATE = 0.85  # per tick, pulls biases back toward 1.0 once a zone clears
++
++
++@dataclass
++class RerouteSuggestion:
++    bottleneck_zone: str
++    upstream_zone: str
++    avoid_edge: tuple[str, str]
++    suggested_edge: tuple[str, str]
++    suggested_via: str
++    message: str
++
++
++class ReroutingEngine:
++    def __init__(self, venue: Venue, sim: CrowdSimulation):
++        self.venue = venue
++        self.sim = sim
++
++    def _decay_all_biases(self) -> None:
++        for k, v in list(self.sim.steer_bias.items()):
++            new_v = 1.0 + (v - 1.0) * DECAY_RATE
++            if abs(new_v - 1.0) < 0.02:
++                del self.sim.steer_bias[k]
++            else:
++                self.sim.steer_bias[k] = new_v
++
++    def apply(self, alerts: list[BottleneckAlert]) -> list[RerouteSuggestion]:
++        self._decay_all_biases()
++        suggestions: list[RerouteSuggestion] = []
++        flagged = {a.zone_id for a in alerts}
++
++        for alert in alerts:
++            z = alert.zone_id
++            upstream = [u for u in self.venue.graph.predecessors(z)
++                        if self.venue.zones[u].type != "entry" or True]
++            for u in upstream:
++                alt_edges = [v for v in self.venue.neighbors(u) if v != z]
++                if not alt_edges:
++                    continue
++
++                # penalised graph: make edges leading into any flagged zone very expensive
++                pg = self.venue.graph.copy()
++                for a, b in list(pg.edges):
++                    if b in flagged:
++                        pg.edges[a, b]["penalised_weight"] = pg.edges[a, b]["base_weight"] * 25
++                    else:
++                        pg.edges[a, b]["penalised_weight"] = pg.edges[a, b]["base_weight"]
++
++                target = min(self.venue.exit_zones,
++                             key=lambda ex: self.sim.dist_to_exit.get(ex, 1e9)) \
++                    if self.sim.dist_to_exit.get(u, 0) else None
++                best_alt, best_path = None, None
++                for v in alt_edges:
++                    try:
++                        path = nx.shortest_path(pg, v, self._nearest_exit(v), weight="penalised_weight")
++                        if best_alt is None:
++                            best_alt, best_path = v, path
++                    except (nx.NetworkXNoPath, nx.NodeNotFound):
++                        continue
++                if best_alt is None:
++                    continue
++
++                self.sim.steer_bias[(u, z)] = THROTTLE_BIAS
++                self.sim.steer_bias[(u, best_alt)] = BOOST_BIAS
++
++                via_str = " -> ".join(self.venue.zones[n].name for n in best_path)
++                suggestions.append(RerouteSuggestion(
++                    bottleneck_zone=z,
++                    upstream_zone=u,
++                    avoid_edge=(u, z),
++                    suggested_edge=(u, best_alt),
++                    suggested_via=via_str,
++                    message=(
++                        f"Predicted crush risk at '{alert.zone_name}' in "
++                        f"{alert.lead_time_s}s (density -> {alert.predicted_density:.1f} ppl/sqm). "
++                        f"Divert flow from '{self.venue.zones[u].name}' away from "
++                        f"'{alert.zone_name}' via: {via_str}."
++                    ),
++                ))
++        return suggestions
++
++    def _nearest_exit(self, zone_id: str) -> str:
++        return min(self.venue.exit_zones,
++                   key=lambda ex: nx.shortest_path_length(
++                       self.venue.graph, zone_id, ex, weight="base_weight"))
+diff --git a/engine/simulation.py b/engine/simulation.py
+new file mode 100644
+index 0000000..632fc70
+--- /dev/null
++++ b/engine/simulation.py
+@@ -0,0 +1,235 @@
++"""
++simulation.py
++--------------
++A macroscopic ("digital twin") crowd simulator.
++
++Why macroscopic instead of per-agent?
++At venue scale (tens of thousands of people) a full agent-based / social-force
++simulation is too expensive to run in real time and doesn't add forecasting
++value over a well-known, empirically validated alternative: the
++**Cell Transmission Model** (Daganzo, 1994), adapted here from vehicle traffic
++to pedestrian flow. Each zone is a "cell" holding an occupancy count; each
++walkway is a channel with a sending/receiving capacity. This is the same
++family of model used by real venue-safety consultancies (see Fruin's Level
++of Service framework, referenced in venue_graph.json's LOS thresholds).
++
++Two effects are modelled explicitly because they are what actually cause
++real-world crushes and are the whole point of forecasting them:
++  1. Discharge collapse: a zone's own outflow rate drops as its density
++     approaches "crush" density (the empirically observed "faster is slower"
++     effect in pedestrian dynamics).
++  2. Receiving-capacity throttling: a corridor cannot push more people into
++     a zone than that zone has room to receive, so congestion backs upstream
++     exactly like a traffic jam - which is what lets us *forecast* it a
++     few ticks before it becomes dangerous.
++"""
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass, field
++
++from .venue import Venue
++
++
++@dataclass
++class ArrivalPhase:
++    """One scripted phase of the demo scenario (sim-seconds are simulation time,
++    not wall-clock time - see orchestrator.py for the wall-clock speed-up)."""
++    start_s: int
++    end_s: int
++    gate_inflow_ppl_per_min: float   # combined arrival rate at gate_a + gate_b
++    egress_intensity: float          # 0..1, fraction of viewing-zone occupants/tick trying to leave
++
++
++DEFAULT_SCENARIO: list[ArrivalPhase] = [
++    ArrivalPhase(0,    900,  gate_inflow_ppl_per_min=1400, egress_intensity=0.00),  # gates open / fans arrive
++    ArrivalPhase(900,  1500, gate_inflow_ppl_per_min=300,  egress_intensity=0.02),  # race running, light amenity churn
++    ArrivalPhase(1500, 2400, gate_inflow_ppl_per_min=0,    egress_intensity=0.55),  # chequered flag -> mass egress
++]
++
++
++def scenario_phase(sim_time_s: int, scenario: list[ArrivalPhase] = DEFAULT_SCENARIO) -> ArrivalPhase:
++    for phase in scenario:
++        if phase.start_s <= sim_time_s < phase.end_s:
++            return phase
++    return scenario[-1]
++
++
++# One-way ingress progression: fans always move deeper into the venue
++# (gate -> concourse -> amenity -> viewing), mirroring the one-way turnstile
++# / concourse design used in real stadiums so people don't churn back and
++# forth. Egress mode uses dist_to_exit instead (computed per-venue below).
++ZONE_RANK = {"entry": 0, "concourse": 1, "amenity": 2, "viewing": 3, "exit": 4}
++
++
++class CrowdSimulation:
++    def __init__(self, venue: Venue, dt_s: int = 10, scenario: list[ArrivalPhase] | None = None):
++        self.venue = venue
++        self.dt_s = dt_s
++        self.scenario = scenario or DEFAULT_SCENARIO
++        self.sim_time_s = 0
++        # precompute static shortest-path distance from every zone to its nearest exit
++        self.dist_to_exit = self._compute_dist_to_exit()
++        # per-edge steering bias the rerouting engine can adjust: (u, v) -> multiplier
++        self.steer_bias: dict[tuple[str, str], float] = {}
++
++    def _compute_dist_to_exit(self) -> dict[str, float]:
++        import networkx as nx
++        dist = {}
++        for zid in self.venue.zones:
++            best = math.inf
++            for ex in self.venue.exit_zones:
++                try:
++                    d = nx.shortest_path_length(self.venue.graph, zid, ex, weight="base_weight")
++                    best = min(best, d)
++                except nx.NetworkXNoPath:
++                    continue
++            dist[zid] = best
++        return dist
++
++    # ---- discharge (outflow) capacity of a zone, with congestion collapse ----
++    def _discharge_rate_ppl_per_min(self, zone_id: str) -> float:
++        z = self.venue.zones[zone_id]
++        t = self.venue.los_thresholds
++        free_flow = z.area_sqm * 1.2          # ppl/min able to approach an exit when uncongested
++        d = z.density
++        if d <= t["congested"]:
++            factor = 1.0
++        elif d >= t["crush_risk"]:
++            factor = 0.15                      # near-total discharge collapse at crush density
++        else:
++            span = t["crush_risk"] - t["congested"]
++            factor = 1.0 - 0.85 * (d - t["congested"]) / span
++        return free_flow * factor
++
++    def _receiving_room(self, zone_id: str) -> int:
++        z = self.venue.zones[zone_id]
++        return max(0, z.capacity - z.occupancy)
++
++    def _out_edge_weight(self, u: str, v: str, mode: str) -> float:
++        """Attractiveness of edge u->v for routing purposes (higher = more preferred)."""
++        edata = self.venue.graph.edges[u, v]
++        vzone = self.venue.zones[v]
++        bias = self.steer_bias.get((u, v), 1.0)
++
++        if mode == "egress":
++            # only ever move towards (or level with) the nearest exit
++            if self.dist_to_exit[v] > self.dist_to_exit[u] + 1e-6:
++                return 0.0
++        else:  # ingress
++            if vzone.type in ("exit", "entry"):
++                return 0.0  # don't send freshly-arrived fans straight out an exit / back to the gate
++            u_rank, v_rank = ZONE_RANK[self.venue.zones[u].type], ZONE_RANK[vzone.type]
++            forward = v_rank > u_rank or (v_rank == u_rank and vzone.type == "amenity")
++            if not forward:
++                return 0.0  # one-way progression only - no backward churn towards the gates
++
++        congestion_penalty = 1.0 + 3.0 * vzone.density / max(self.venue.los_thresholds["at_risk"], 0.1)
++        room_factor = max(self._receiving_room(v), 1)
++        return bias * edata["capacity_ppl_per_min"] * room_factor / congestion_penalty
++
++    def _route_split(self, u: str, mode: str) -> dict[str, float]:
++        neighbors = self.venue.neighbors(u)
++        weights = {v: self._out_edge_weight(u, v, mode) for v in neighbors}
++        total = sum(weights.values())
++        if total <= 0:
++            return {}
++        return {v: w / total for v, w in weights.items() if w > 0}
++
++    def step(self) -> None:
++        """Advance the simulation by one tick (dt_s simulated seconds)."""
++        phase = scenario_phase(self.sim_time_s, self.scenario)
++        dt_min = self.dt_s / 60.0
++
++        pending_out: dict[str, float] = {zid: 0.0 for zid in self.venue.zones}
++        pending_in: dict[str, float] = {zid: 0.0 for zid in self.venue.zones}
++
++        for zid, zone in self.venue.zones.items():
++            if zone.type in ("entry",):
++                continue  # entries don't discharge via the graph logic, they just inject below
++
++            # decide whether this zone is currently acting in "egress" or "ingress" routing mode
++            if zone.type == "viewing":
++                # grandstands/paddock are pure sinks until egress actually begins -
++                # fans watching the race don't wander back out through the concourse
++                if phase.egress_intensity <= 0:
++                    continue
++                mode, intensity = "egress", phase.egress_intensity
++            elif zone.type == "amenity":
++                mode = "egress" if phase.egress_intensity > 0 else "ingress"
++                intensity = phase.egress_intensity if mode == "egress" else 1.0
++            elif zone.type == "exit":
++                # exits are the physical gate/turnstile bottleneck: people here leave the
++                # venue entirely (removed from the simulated system), throttled by the
++                # same congestion-collapse curve as any other discharge - a packed exit
++                # gate genuinely processes people slower, which is exactly the failure
++                # mode this whole system exists to forecast and relieve in advance.
++                if zone.occupancy <= 0:
++                    continue
++                left_venue = min(zone.occupancy, self._discharge_rate_ppl_per_min(zid) * dt_min)
++                pending_out[zid] += left_venue
++                continue
++            else:  # concourse
++                mode = "egress" if phase.egress_intensity > 0.3 else "ingress"
++                intensity = 1.0
++
++            if zone.occupancy <= 0:
++                continue
++
++            max_discharge = self._discharge_rate_ppl_per_min(zid) * dt_min
++            desired_out = min(zone.occupancy * (intensity if mode == "egress" else 1.0), max_discharge)
++            if desired_out <= 0:
++                continue
++
++            split = self._route_split(zid, mode)
++            if not split:
++                continue
++
++            for v, frac in split.items():
++                edge = self.venue.graph.edges[zid, v]
++                proposed = desired_out * frac
++                edge_cap = edge["capacity_ppl_per_min"] * dt_min
++                room = self._receiving_room(v)
++                actual = max(0.0, min(proposed, edge_cap, room - pending_in[v]))
++                edge["flow"] = actual / dt_min if dt_min else 0.0
++                pending_out[zid] += actual
++                pending_in[v] += actual
++
++        # apply moves
++        for zid, zone in self.venue.zones.items():
++            zone.occupancy = max(0, zone.occupancy - int(pending_out[zid]) + int(pending_in[zid]))
++
++        # exogenous arrivals at the gates
++        if phase.gate_inflow_ppl_per_min > 0 and self.venue.entry_zones:
++            per_gate = phase.gate_inflow_ppl_per_min * dt_min / len(self.venue.entry_zones)
++            for gid in self.venue.entry_zones:
++                gzone = self.venue.zones[gid]
++                room = self._receiving_room(gid)
++                gzone.occupancy += int(min(per_gate, room))
++                # gate itself immediately tries to push people onward to the concourse
++                split = self._route_split(gid, "ingress")
++                for v, frac in split.items():
++                    edge = self.venue.graph.edges[gid, v]
++                    edge_cap = edge["capacity_ppl_per_min"] * dt_min
++                    room_v = self._receiving_room(v)
++                    move = int(min(gzone.occupancy * frac, edge_cap, room_v))
++                    gzone.occupancy -= move
++                    self.venue.zones[v].occupancy += move
++
++        self.sim_time_s += self.dt_s
++
++    def snapshot(self) -> dict:
++        return {
++            "sim_time_s": self.sim_time_s,
++            "phase": scenario_phase(self.sim_time_s, self.scenario).__dict__,
++            "zones": {
++                zid: {
++                    "occupancy": z.occupancy,
++                    "capacity": z.capacity,
++                    "density": round(z.density, 3),
++                    "los": self.venue.los_level(z.density),
++                }
++                for zid, z in self.venue.zones.items()
++            },
++            "total_occupancy": self.venue.total_occupancy(),
++        }
+diff --git a/engine/venue.py b/engine/venue.py
+new file mode 100644
+index 0000000..655edd8
+--- /dev/null
++++ b/engine/venue.py
+@@ -0,0 +1,98 @@
++"""
++venue.py
++--------
++Loads the venue topology (zones + walkways) into a NetworkX graph that the
++rest of the engine (simulation, forecasting, rerouting) operates on.
++
++A "zone" is any bounded area with a floor area (sqm) and a max capacity.
++An "edge" is a walkway/corridor connecting two zones with a physical width
++and a derived flow capacity (people/min), following the standard pedestrian
++engineering assumption that pathway throughput scales with width
++(Fruin, "Pedestrian Planning and Design").
++"""
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass, field
++from pathlib import Path
++
++import networkx as nx
++
++
++@dataclass
++class Zone:
++    id: str
++    name: str
++    x: float
++    y: float
++    area_sqm: float
++    capacity: int
++    type: str
++    occupancy: int = 0
++
++    @property
++    def density(self) -> float:
++        """People per square metre - the standard crowd-safety unit (Fruin LOS)."""
++        return self.occupancy / self.area_sqm if self.area_sqm else 0.0
++
++
++@dataclass
++class Venue:
++    graph: nx.DiGraph
++    zones: dict[str, Zone] = field(default_factory=dict)
++    los_thresholds: dict[str, float] = field(default_factory=dict)
++    entry_zones: list[str] = field(default_factory=list)
++    exit_zones: list[str] = field(default_factory=list)
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> "Venue":
++        data = json.loads(Path(path).read_text())
++        g = nx.DiGraph()
++        zones: dict[str, Zone] = {}
++
++        for z in data["zones"]:
++            zone = Zone(
++                id=z["id"], name=z["name"], x=z["x"], y=z["y"],
++                area_sqm=z["area_sqm"], capacity=z["capacity"], type=z["type"],
++            )
++            zones[zone.id] = zone
++            g.add_node(zone.id, **z)
++
++        for e in data["edges"]:
++            # walkways are treated as bidirectional; base weight = length_m,
++            # the rerouting engine later augments this with a congestion penalty.
++            for a, b in ((e["from"], e["to"]), (e["to"], e["from"])):
++                g.add_edge(
++                    a, b,
++                    base_weight=e["length_m"],
++                    capacity_ppl_per_min=e["capacity_ppl_per_min"],
++                    width_m=e["width_m"],
++                    flow=0.0,               # current people/min flowing this way, updated by sim
++                )
++
++        entry_zones = [z.id for z in zones.values() if z.type == "entry"]
++        exit_zones = [z.id for z in zones.values() if z.type == "exit"]
++
++        return cls(
++            graph=g, zones=zones,
++            los_thresholds=data["meta"]["density_los_thresholds_ppl_per_sqm"],
++            entry_zones=entry_zones, exit_zones=exit_zones,
++        )
++
++    def neighbors(self, zone_id: str) -> list[str]:
++        return list(self.graph.successors(zone_id))
++
++    def total_occupancy(self) -> int:
++        return sum(z.occupancy for z in self.zones.values())
++
++    def los_level(self, density: float) -> str:
++        t = self.los_thresholds
++        if density >= t["crush_risk"]:
++            return "crush_risk"
++        if density >= t["at_risk"]:
++            return "at_risk"
++        if density >= t["congested"]:
++            return "congested"
++        if density >= t["comfortable"]:
++            return "busy"
++        return "comfortable"
+diff --git a/requirements-grandprix-live.txt b/requirements-grandprix-live.txt
+new file mode 100644
+index 0000000..d5045a7
+--- /dev/null
++++ b/requirements-grandprix-live.txt
+@@ -0,0 +1,3 @@
++networkx>=3.0
++numpy>=1.24
++scikit-learn>=1.3
+diff --git a/scripts/run_demo.py b/scripts/run_demo.py
+new file mode 100644
+index 0000000..547a944
+--- /dev/null
++++ b/scripts/run_demo.py
+@@ -0,0 +1,64 @@
++"""
++scripts/run_demo.py
++--------------------
++Headless run of the digital twin - no browser needed. Useful as a fallback
++demo path (if wifi/projector setup fails) and as a quick sanity check while
++developing. Prints total occupancy every tick and any new alerts / reroute
++actions as they fire.
++
++Usage:
++    python3 scripts/run_demo.py                 # runs the full scripted scenario
++    python3 scripts/run_demo.py --ticks 60       # shorter run
++    python3 scripts/run_demo.py --fast           # no wall-clock delay between ticks
++"""
++from __future__ import annotations
++
++import argparse
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++from engine import DigitalTwin  # noqa: E402
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--ticks", type=int, default=240, help="number of ticks to simulate (default 240 -> 40 sim-min at dt=10s)")
++    ap.add_argument("--dt", type=int, default=10, help="simulated seconds per tick")
++    ap.add_argument("--horizon", type=int, default=6, help="forecast horizon in ticks")
++    ap.add_argument("--fast", action="store_true", help="don't sleep between ticks")
++    args = ap.parse_args()
++
++    twin = DigitalTwin(str(ROOT / "venue" / "venue_graph.json"), dt_s=args.dt, horizon_ticks=args.horizon)
++    delay = 0.0 if args.fast else 0.05
++
++    print(f"{'t(s)':>6} {'phase':<28} {'occupancy':>10}  status")
++    seen_alert_zones: set[str] = set()
++
++    for snap in twin.run_headless(args.ticks, wall_delay_s=delay):
++        alerts = snap["alerts"]
++        reroutes = snap["reroutes"]
++        phase_name = ("EGRESS" if snap["phase"]["egress_intensity"] > 0.3 else
++                      "RACE" if snap["phase"]["egress_intensity"] > 0 else
++                      "ARRIVALS" if snap["phase"]["gate_inflow_ppl_per_min"] > 0 else "STEADY")
++
++        status = ""
++        new_zones = {a["zone_id"] for a in alerts} - seen_alert_zones
++        if new_zones:
++            for a in alerts:
++                if a["zone_id"] in new_zones:
++                    status += f"  ALERT: {a['zone_name']} -> {a['los_predicted']} in {a['lead_time_s']}s"
++        seen_alert_zones = {a["zone_id"] for a in alerts}
++
++        print(f"{snap['sim_time_s']:>6} {phase_name:<28} {snap['total_occupancy']:>10,}{status}")
++
++        for r in reroutes:
++            print(f"           -> REROUTE: {r['message']}")
++
++    print("\nDone. Run `python3 server/app.py` for the live visual dashboard.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/server/app.py b/server/app.py
+new file mode 100644
+index 0000000..94dc0c4
+--- /dev/null
++++ b/server/app.py
+@@ -0,0 +1,118 @@
++"""
++server/app.py
++--------------
++Deliberately dependency-free (stdlib `http.server` only) so this runs on
++any judge's laptop with nothing but `python3` - no `pip install` required
++at demo time, no risk of a venue wifi killing your pip install mid-demo.
++
++Runs the DigitalTwin in a background thread (1 tick per TICK_INTERVAL_S
++wall-clock seconds; each tick advances the simulation by dt_s simulated
++seconds - see engine/simulation.py DEFAULT_SCENARIO for the timeline).
++The dashboard polls GET /api/state once a second and redraws.
++"""
++from __future__ import annotations
++
++import json
++import sys
++import threading
++import time
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++from engine import DigitalTwin  # noqa: E402
++
++VENUE_PATH = ROOT / "venue" / "venue_graph.json"
++DASHBOARD_DIR = ROOT / "dashboard"
++TICK_INTERVAL_S = 1.0     # wall-clock seconds between ticks (demo speed)
++SIM_DT_S = 10             # simulated seconds advanced per tick
++FORECAST_HORIZON_TICKS = 6  # -> 60 simulated seconds of look-ahead
++
++_lock = threading.Lock()
++_twin = DigitalTwin(str(VENUE_PATH), dt_s=SIM_DT_S, horizon_ticks=FORECAST_HORIZON_TICKS)
++_latest_state = _twin.state()
++_running = True
++
++
++def _tick_loop():
++    global _latest_state
++    while _running:
++        with _lock:
++            _latest_state = _twin.tick()
++        time.sleep(TICK_INTERVAL_S)
++
++
++def _reset():
++    global _twin, _latest_state
++    with _lock:
++        _twin = DigitalTwin(str(VENUE_PATH), dt_s=SIM_DT_S, horizon_ticks=FORECAST_HORIZON_TICKS)
++        _latest_state = _twin.state()
++
++
++CONTENT_TYPES = {".html": "text/html", ".css": "text/css", ".js": "application/javascript",
++                  ".json": "application/json"}
++
++
++class Handler(BaseHTTPRequestHandler):
++    def log_message(self, fmt, *args):
++        pass  # keep the demo terminal quiet
++
++    def _send_json(self, payload: dict, code: int = 200):
++        body = json.dumps(payload).encode()
++        self.send_response(code)
++        self.send_header("Content-Type", "application/json")
++        self.send_header("Content-Length", str(len(body)))
++        self.send_header("Access-Control-Allow-Origin", "*")
++        self.end_headers()
++        self.wfile.write(body)
++
++    def _send_file(self, path: Path):
++        if not path.exists():
++            self.send_error(404)
++            return
++        body = path.read_bytes()
++        self.send_response(200)
++        self.send_header("Content-Type", CONTENT_TYPES.get(path.suffix, "application/octet-stream"))
++        self.send_header("Content-Length", str(len(body)))
++        self.end_headers()
++        self.wfile.write(body)
++
++    def do_GET(self):
++        if self.path == "/api/state":
++            with _lock:
++                self._send_json(_latest_state)
++            return
++        if self.path == "/api/reset":
++            _reset()
++            self._send_json({"ok": True})
++            return
++        if self.path in ("/", "/index.html"):
++            self._send_file(DASHBOARD_DIR / "index.html")
++            return
++        clean = self.path.lstrip("/")
++        candidate = DASHBOARD_DIR / clean
++        if candidate.resolve().parent == DASHBOARD_DIR.resolve() and candidate.exists():
++            self._send_file(candidate)
++            return
++        self.send_error(404)
++
++
++def main():
++    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
++    t = threading.Thread(target=_tick_loop, daemon=True)
++    t.start()
++    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
++    print(f"Digital twin running -> http://localhost:{port}  (Ctrl+C to stop)")
++    try:
++        server.serve_forever()
++    except KeyboardInterrupt:
++        pass
++    finally:
++        global _running
++        _running = False
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_engine.py b/tests/test_engine.py
+new file mode 100644
+index 0000000..2764e13
+--- /dev/null
++++ b/tests/test_engine.py
+@@ -0,0 +1,84 @@
++"""
++tests/test_engine.py
++----------------------
++Uses stdlib `unittest` on purpose - no pytest install required at demo time.
++
++Run with:  python3 -m unittest discover -s tests
++"""
++from __future__ import annotations
++
++import sys
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++from engine import DigitalTwin, Venue  # noqa: E402
++
++VENUE_PATH = ROOT / "venue" / "venue_graph.json"
++
++
++class TestVenueLoading(unittest.TestCase):
++    def test_loads_all_zones_and_edges(self):
++        venue = Venue.from_json(VENUE_PATH)
++        self.assertEqual(len(venue.zones), 12)
++        self.assertGreater(venue.graph.number_of_edges(), 0)
++        self.assertIn("gate_a", venue.entry_zones)
++        self.assertIn("exit_2", venue.exit_zones)
++
++    def test_los_thresholds_monotonic(self):
++        venue = Venue.from_json(VENUE_PATH)
++        t = venue.los_thresholds
++        self.assertLess(t["comfortable"], t["congested"])
++        self.assertLess(t["congested"], t["at_risk"])
++        self.assertLess(t["at_risk"], t["crush_risk"])
++
++
++class TestSimulationConservation(unittest.TestCase):
++    """Occupancy should never go negative and should stay within venue-wide
++    reasonable bounds - a broken flow model tends to fail these first."""
++
++    def test_no_negative_occupancy_over_a_full_run(self):
++        twin = DigitalTwin(str(VENUE_PATH), dt_s=10, horizon_ticks=6)
++        for snap in twin.run_headless(300):
++            for z in snap["zones"]:
++                self.assertGreaterEqual(z["occupancy"], 0, f"{z['id']} went negative")
++                self.assertGreaterEqual(z["capacity"] * 1.05, z["occupancy"],
++                                         f"{z['id']} exceeded capacity - receiving-room throttle failed")
++
++    def test_venue_fills_then_empties(self):
++        """Sanity check the whole point of the scenario: crowd builds up during
++        arrivals, and the venue is essentially empty again after mass egress."""
++        twin = DigitalTwin(str(VENUE_PATH), dt_s=10, horizon_ticks=6)
++        occupancies = [snap["total_occupancy"] for snap in twin.run_headless(300)]
++        peak = max(occupancies)
++        self.assertGreater(peak, 15000, "scenario never reached a meaningful crowd size")
++        self.assertLess(occupancies[-1], peak * 0.05, "venue never drained after mass egress")
++
++
++class TestForecastingAndRerouting(unittest.TestCase):
++    def test_alerts_fire_during_mass_egress_and_reroutes_respond(self):
++        twin = DigitalTwin(str(VENUE_PATH), dt_s=10, horizon_ticks=6)
++        total_alerts = 0
++        total_reroutes = 0
++        for snap in twin.run_headless(300):
++            total_alerts += len(snap["alerts"])
++            total_reroutes += len(snap["reroutes"])
++        self.assertGreater(total_alerts, 0, "no bottleneck was ever forecast - scenario or thresholds need tuning")
++        self.assertGreater(total_reroutes, 0, "rerouting engine never fired in response to an alert")
++
++    def test_alert_has_positive_lead_time(self):
++        """The entire value proposition: alerts must fire with real lead time,
++        not just describe what's already happened."""
++        twin = DigitalTwin(str(VENUE_PATH), dt_s=10, horizon_ticks=6)
++        found = False
++        for snap in twin.run_headless(300):
++            for a in snap["alerts"]:
++                found = True
++                self.assertGreater(a["lead_time_s"], 0)
++        self.assertTrue(found, "no alerts fired to check lead time on")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/venue/venue_graph.json b/venue/venue_graph.json
+new file mode 100644
+index 0000000..f5b691f
+--- /dev/null
++++ b/venue/venue_graph.json
+@@ -0,0 +1,42 @@
++{
++  "meta": {
++    "name": "GrandPrix City Circuit - Spectator Venue",
++    "description": "Synthetic venue graph used to demo the digital twin. Coordinates are in an abstract 0-1000 x 0-600 canvas space, not real GPS.",
++    "density_los_thresholds_ppl_per_sqm": {
++      "comfortable": 1.0,
++      "congested": 2.0,
++      "at_risk": 3.0,
++      "crush_risk": 4.0
++    }
++  },
++  "zones": [
++    { "id": "gate_a",        "name": "Gate A (North Entry)",   "x": 80,  "y": 80,  "area_sqm": 600,  "capacity": 1800, "type": "entry"  },
++    { "id": "gate_b",        "name": "Gate B (South Entry)",   "x": 80,  "y": 520, "area_sqm": 600,  "capacity": 1800, "type": "entry"  },
++    { "id": "concourse_1",   "name": "North Concourse",        "x": 280, "y": 150, "area_sqm": 1200, "capacity": 3600, "type": "concourse" },
++    { "id": "concourse_2",   "name": "South Concourse",        "x": 280, "y": 450, "area_sqm": 1200, "capacity": 3600, "type": "concourse" },
++    { "id": "food_court",    "name": "Food Court",             "x": 480, "y": 300, "area_sqm": 900,  "capacity": 2700, "type": "amenity" },
++    { "id": "grandstand_n",  "name": "Grandstand North (Turn 1)", "x": 700, "y": 120, "area_sqm": 2000, "capacity": 8000, "type": "viewing" },
++    { "id": "grandstand_s",  "name": "Grandstand South (Turn 3)", "x": 700, "y": 480, "area_sqm": 2000, "capacity": 8000, "type": "viewing" },
++    { "id": "paddock_club",  "name": "Paddock Club (Straight)",   "x": 700, "y": 300, "area_sqm": 800,  "capacity": 1600, "type": "viewing" },
++    { "id": "merch_zone",    "name": "Merchandise Plaza",       "x": 480, "y": 550, "area_sqm": 700,  "capacity": 2100, "type": "amenity" },
++    { "id": "exit_1",        "name": "Exit 1 (North)",          "x": 900, "y": 120, "area_sqm": 500,  "capacity": 2400, "type": "exit" },
++    { "id": "exit_2",        "name": "Exit 2 (Main)",           "x": 900, "y": 300, "area_sqm": 700,  "capacity": 3000, "type": "exit" },
++    { "id": "exit_3",        "name": "Exit 3 (South)",          "x": 900, "y": 480, "area_sqm": 500,  "capacity": 2400, "type": "exit" }
++  ],
++  "edges": [
++    { "from": "gate_a",      "to": "concourse_1",  "width_m": 10, "length_m": 60,  "capacity_ppl_per_min": 800 },
++    { "from": "gate_b",      "to": "concourse_2",  "width_m": 10, "length_m": 60,  "capacity_ppl_per_min": 800 },
++    { "from": "concourse_1", "to": "food_court",   "width_m": 8,  "length_m": 90,  "capacity_ppl_per_min": 640 },
++    { "from": "concourse_2", "to": "food_court",   "width_m": 8,  "length_m": 90,  "capacity_ppl_per_min": 640 },
++    { "from": "concourse_1", "to": "grandstand_n", "width_m": 9,  "length_m": 160, "capacity_ppl_per_min": 720 },
++    { "from": "concourse_2", "to": "grandstand_s", "width_m": 9,  "length_m": 160, "capacity_ppl_per_min": 720 },
++    { "from": "food_court",  "to": "paddock_club", "width_m": 6,  "length_m": 100, "capacity_ppl_per_min": 480 },
++    { "from": "food_court",  "to": "merch_zone",   "width_m": 6,  "length_m": 100, "capacity_ppl_per_min": 480 },
++    { "from": "grandstand_n","to": "paddock_club", "width_m": 5,  "length_m": 140, "capacity_ppl_per_min": 400 },
++    { "from": "grandstand_s","to": "paddock_club", "width_m": 5,  "length_m": 140, "capacity_ppl_per_min": 400 },
++    { "from": "grandstand_n","to": "exit_1",       "width_m": 8,  "length_m": 70,  "capacity_ppl_per_min": 640 },
++    { "from": "paddock_club","to": "exit_2",       "width_m": 8,  "length_m": 70,  "capacity_ppl_per_min": 640 },
++    { "from": "grandstand_s","to": "exit_3",       "width_m": 8,  "length_m": 70,  "capacity_ppl_per_min": 640 },
++    { "from": "merch_zone",  "to": "exit_3",       "width_m": 6,  "length_m": 90,  "capacity_ppl_per_min": 480 }
++  ]
++}

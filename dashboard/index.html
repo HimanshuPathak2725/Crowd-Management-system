@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Race Control — Crowd Digital Twin</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div>
+      <div class="brand-title">GRANDPRIX CROWD DIGITAL TWIN</div>
+      <div class="brand-sub">GrandPrixGeekRoom — Predictive Crowd Management</div>
+    </div>
+  </div>
+  <div class="session-status">
+    <div class="status-chip" id="phase-chip">CONNECTING…</div>
+    <div class="clock">
+      <span class="clock-label">SIM T+</span>
+      <span class="clock-value" id="sim-clock">00:00</span>
+    </div>
+  </div>
+  <div class="controls">
+    <button id="reset-btn" class="btn-ghost">RESET SIM</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <section class="panel camera-panel">
+    <div class="panel-head">
+      <span class="panel-title">CCTV · LIVE AI PERCEPTION</span>
+      <span class="badge" id="vision-status">OFFLINE</span>
+    </div>
+    <div class="camera-controls">
+      <label>Camera
+        <select id="vision-profile">
+          <option value="north_grandstand">North Grandstand</option>
+          <option value="south_grandstand">South Grandstand</option>
+          <option value="main_concourse">Main Concourse</option>
+        </select>
+      </label>
+      <label>Alert @
+        <input id="vision-threshold" type="number" min="1" value="25" />
+      </label>
+      <label>Venue scale
+        <input id="vision-scale" type="number" min="1" value="80" />
+        <small>people / detection</small>
+      </label>
+      <input id="vision-file" type="file" accept="video/*" />
+      <button id="vision-start" class="btn-primary">START AI CAMERA</button>
+      <button id="vision-stop" class="btn-ghost">STOP</button>
+    </div>
+    <div class="camera-grid">
+      <div class="camera-cell">
+        <div class="camera-label">SOURCE VIDEO</div>
+        <video id="source-video" controls muted playsinline></video>
+      </div>
+      <div class="camera-cell">
+        <div class="camera-label">YOLO PERSON TRACKING + ACTION OVERLAY</div>
+        <img id="vision-stream" alt="Live AI camera output" />
+      </div>
+    </div>
+    <div class="vision-summary">
+      <div><span>DETECTED</span><strong id="vision-count">0</strong></div>
+      <div><span>CALIBRATED OCCUPANCY</span><strong id="vision-occupancy">0</strong></div>
+      <div><span>FPS</span><strong id="vision-fps">0</strong></div>
+      <div class="vision-action"><span>AI ACTION</span><strong id="vision-action">Awaiting camera</strong></div>
+    </div>
+  </section>
+
+  <section class="map-panel panel">
+    <div class="panel-head">
+      <span class="panel-title">VENUE MAP — LIVE</span>
+      <span class="panel-hint">size = capacity · fill = current density · line = flow</span>
+    </div>
+    <canvas id="venue-canvas"></canvas>
+    <div class="legend">
+      <span class="legend-item"><i class="dot dot-comfortable"></i>Comfortable</span>
+      <span class="legend-item"><i class="dot dot-busy"></i>Busy</span>
+      <span class="legend-item"><i class="dot dot-congested"></i>Congested</span>
+      <span class="legend-item"><i class="dot dot-at_risk"></i>At Risk</span>
+      <span class="legend-item"><i class="dot dot-crush_risk"></i>Crush Risk</span>
+      <span class="legend-item legend-sep"><i class="dot dot-reroute"></i>Active Reroute</span>
+    </div>
+  </section>
+
+  <aside class="side-panels">
+
+    <section class="panel alerts-panel">
+      <div class="panel-head">
+        <span class="panel-title">FORECAST · BOTTLENECK ALERTS</span>
+        <span class="badge" id="alert-count">0</span>
+      </div>
+      <div class="panel-body" id="alerts-list">
+        <div class="empty-state">No congestion forecasted. Track is clear.</div>
+      </div>
+    </section>
+
+    <section class="panel reroute-panel">
+      <div class="panel-head">
+        <span class="panel-title">AUTO-REROUTE ACTIONS</span>
+        <span class="badge" id="reroute-count">0</span>
+      </div>
+      <div class="panel-body" id="reroute-list">
+        <div class="empty-state">No rerouting active.</div>
+      </div>
+    </section>
+
+  </aside>
+
+  <section class="panel footer-panel">
+    <div class="occ-block">
+      <div class="occ-label">TOTAL OCCUPANCY</div>
+      <div class="occ-value"><span id="occ-current">0</span><span class="occ-max"> / <span id="occ-cap">0</span></span></div>
+    </div>
+    <canvas id="spark-canvas"></canvas>
+    <div class="model-note">
+      Forecast model: online <code>SGDRegressor</code>, retrained every tick on live simulation data · Flow model: Cell Transmission Model (Daganzo) · Thresholds: Fruin pedestrian LOS
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

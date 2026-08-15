@@ -1,0 +1,767 @@
+diff --git a/dashboard/app.js b/dashboard/app.js
+index 0449b1c..80f1a83 100644
+--- a/dashboard/app.js
++++ b/dashboard/app.js
+@@ -1,3 +1,85 @@
++
++const visionStream = document.getElementById('vision-stream');
++let selectedVideoUrl = null;
++
++async function startVision() {
++  const fileInput = document.getElementById('vision-file');
++  const file = fileInput.files[0];
++  if (!file) {
++    alert('Choose a crowd/CCTV video first.');
++    return;
++  }
++  const profile = document.getElementById('vision-profile').value;
++  const threshold = document.getElementById('vision-threshold').value;
++  const scale = document.getElementById('vision-scale').value;
++
++  if (selectedVideoUrl) URL.revokeObjectURL(selectedVideoUrl);
++  selectedVideoUrl = URL.createObjectURL(file);
++  const source = document.getElementById('source-video');
++  source.src = selectedVideoUrl;
++  source.play().catch(() => {});
++
++  const statusEl = document.getElementById('vision-status');
++  statusEl.textContent = 'UPLOADING…';
++
++  try {
++    const params = new URLSearchParams({
++      profile,
++      threshold,
++      scale,
++      filename: file.name
++    });
++    const res = await fetch('/api/vision/upload?' + params.toString(), {
++      method: 'POST',
++      headers: {'Content-Type': 'application/octet-stream'},
++      body: file
++    });
++    const result = await res.json();
++    if (!result.ok) throw new Error(result.error || 'Vision start failed');
++
++    visionStream.src = '/api/vision/stream?ts=' + Date.now();
++  } catch (err) {
++    statusEl.textContent = 'ERROR';
++    alert(err.message);
++  }
++}
++
++async function stopVision() {
++  await fetch('/api/vision/stop', {method: 'POST'});
++  visionStream.removeAttribute('src');
++  document.getElementById('vision-status').textContent = 'OFFLINE';
++}
++
++async function pollVision() {
++  try {
++    const res = await fetch('/api/vision/status');
++    const v = await res.json();
++
++    document.getElementById('vision-status').textContent =
++      v.error ? 'ERROR' : (v.running ? (v.alert ? 'BOTTLENECK' : 'TRACKING') : 'OFFLINE');
++
++    document.getElementById('vision-count').textContent = v.detected_people ?? 0;
++    document.getElementById('vision-occupancy').textContent =
++      (v.calibrated_occupancy ?? 0).toLocaleString();
++    document.getElementById('vision-fps').textContent = v.fps ?? 0;
++
++    const action = document.getElementById('vision-action');
++    if (v.error) {
++      action.textContent = v.error;
++      action.style.color = '#FF5C52';
++    } else if (v.alert) {
++      action.textContent = v.recommendation + '  ·  ' + v.direction;
++      action.style.color = '#00D4FF';
++    } else {
++      action.textContent = 'TRACK CLEAR · monitoring ' + (v.profile_label || '');
++      action.style.color = '#17C964';
++    }
++  } catch (_) {}
++}
++
++document.getElementById('vision-start').addEventListener('click', startVision);
++document.getElementById('vision-stop').addEventListener('click', stopVision);
++
+ const POLL_MS = 1000;
+ 
+ const canvas = document.getElementById('venue-canvas');
+@@ -176,6 +258,19 @@ function renderSparkline() {
+   sparkCtx.restore();
+ }
+ 
++
++function updateVisionFromState(state) {
++  const v = state.vision;
++  if (!v) return;
++  const statusEl = document.getElementById('vision-status');
++  statusEl.textContent = v.error ? 'ERROR' : (v.running ? (v.alert ? 'BOTTLENECK' : 'TRACKING') : 'OFFLINE');
++  if (v.alert) {
++    const action = document.getElementById('vision-action');
++    action.textContent = v.recommendation + ' · ' + v.direction;
++    action.style.color = '#00D4FF';
++  }
++}
++
+ function updatePanels(state) {
+   document.getElementById('phase-chip').textContent = phaseLabel(state.phase);
+   document.getElementById('sim-clock').textContent = fmtClock(state.sim_time_s);
+@@ -229,6 +324,7 @@ async function poll() {
+     render(state);
+     renderSparkline();
+     updatePanels(state);
++    updateVisionFromState(state);
+   } catch (err) {
+     document.getElementById('phase-chip').textContent = 'DISCONNECTED';
+   }
+diff --git a/dashboard/index.html b/dashboard/index.html
+index c916a2f..5c955c5 100644
+--- a/dashboard/index.html
++++ b/dashboard/index.html
+@@ -30,6 +30,48 @@
+ 
+ <main class="layout">
+ 
++  <section class="panel camera-panel">
++    <div class="panel-head">
++      <span class="panel-title">CCTV · LIVE AI PERCEPTION</span>
++      <span class="badge" id="vision-status">OFFLINE</span>
++    </div>
++    <div class="camera-controls">
++      <label>Camera
++        <select id="vision-profile">
++          <option value="north_grandstand">North Grandstand</option>
++          <option value="south_grandstand">South Grandstand</option>
++          <option value="main_concourse">Main Concourse</option>
++        </select>
++      </label>
++      <label>Alert @
++        <input id="vision-threshold" type="number" min="1" value="25" />
++      </label>
++      <label>Venue scale
++        <input id="vision-scale" type="number" min="1" value="80" />
++        <small>people / detection</small>
++      </label>
++      <input id="vision-file" type="file" accept="video/*" />
++      <button id="vision-start" class="btn-primary">START AI CAMERA</button>
++      <button id="vision-stop" class="btn-ghost">STOP</button>
++    </div>
++    <div class="camera-grid">
++      <div class="camera-cell">
++        <div class="camera-label">SOURCE VIDEO</div>
++        <video id="source-video" controls muted playsinline></video>
++      </div>
++      <div class="camera-cell">
++        <div class="camera-label">YOLO PERSON TRACKING + ACTION OVERLAY</div>
++        <img id="vision-stream" alt="Live AI camera output" />
++      </div>
++    </div>
++    <div class="vision-summary">
++      <div><span>DETECTED</span><strong id="vision-count">0</strong></div>
++      <div><span>CALIBRATED OCCUPANCY</span><strong id="vision-occupancy">0</strong></div>
++      <div><span>FPS</span><strong id="vision-fps">0</strong></div>
++      <div class="vision-action"><span>AI ACTION</span><strong id="vision-action">Awaiting camera</strong></div>
++    </div>
++  </section>
++
+   <section class="map-panel panel">
+     <div class="panel-head">
+       <span class="panel-title">VENUE MAP — LIVE</span>
+diff --git a/dashboard/style.css b/dashboard/style.css
+index 045a6ef..60abc35 100644
+--- a/dashboard/style.css
++++ b/dashboard/style.css
+@@ -167,3 +167,114 @@ body{
+   .side-panels{grid-column:1;grid-row:2;flex-direction:row;}
+   .footer-panel{grid-column:1;grid-row:3;flex-wrap:wrap;}
+ }
++
++
++.camera-panel{
++  grid-column:1 / span 2;
++  grid-row:1;
++  min-height:0;
++}
++.camera-controls{
++  display:flex;
++  gap:10px;
++  align-items:end;
++  flex-wrap:wrap;
++  padding:10px 12px;
++  border-bottom:1px solid var(--line);
++  background:#101418;
++}
++.camera-controls label{
++  display:flex;
++  flex-direction:column;
++  gap:4px;
++  color:var(--text-dim);
++  font-size:9px;
++  letter-spacing:.07em;
++  text-transform:uppercase;
++}
++.camera-controls input,
++.camera-controls select{
++  min-width:120px;
++  background:#0d1114;
++  color:var(--text-main);
++  border:1px solid var(--line);
++  padding:7px 8px;
++  border-radius:4px;
++  font-family:var(--font-mono);
++  font-size:11px;
++}
++.camera-controls small{
++  text-transform:none;
++  letter-spacing:0;
++  color:#626D75;
++}
++.btn-primary{
++  background:#00B8D9;
++  color:#061014;
++  border:0;
++  border-radius:4px;
++  padding:8px 12px;
++  font-family:var(--font-mono);
++  font-size:11px;
++  font-weight:800;
++  letter-spacing:.05em;
++  cursor:pointer;
++}
++.camera-grid{
++  display:grid;
++  grid-template-columns:1fr 1fr;
++  gap:1px;
++  background:var(--line);
++  min-height:310px;
++}
++.camera-cell{
++  position:relative;
++  background:#0a0e11;
++  min-height:310px;
++  overflow:hidden;
++}
++.camera-label{
++  position:absolute;
++  top:8px;
++  left:10px;
++  z-index:2;
++  font:700 9px var(--font-mono);
++  letter-spacing:.08em;
++  color:#CBD3D8;
++  background:rgba(6,10,12,.8);
++  padding:5px 7px;
++}
++#source-video,
++#vision-stream{
++  display:block;
++  width:100%;
++  height:100%;
++  min-height:310px;
++  object-fit:contain;
++  background:#050709;
++}
++.vision-summary{
++  display:grid;
++  grid-template-columns:130px 180px 110px 1fr;
++  gap:0;
++  border-top:1px solid var(--line);
++}
++.vision-summary > div{
++  padding:9px 12px;
++  border-right:1px solid var(--line);
++}
++.vision-summary span{
++  display:block;
++  font:10px var(--font-mono);
++  color:var(--text-dim);
++}
++.vision-summary strong{
++  display:block;
++  margin-top:3px;
++  font:700 16px var(--font-mono);
++}
++.vision-action strong{color:#17C964;}
++@media (max-width:1100px){
++  .camera-grid{grid-template-columns:1fr;}
++  .vision-summary{grid-template-columns:1fr 1fr;}
++}
+diff --git a/engine/orchestrator.py b/engine/orchestrator.py
+index 1c89eb3..98d9791 100644
+--- a/engine/orchestrator.py
++++ b/engine/orchestrator.py
+@@ -29,6 +29,13 @@ class DigitalTwin:
+         self.alert_log: list[dict] = []
+         self.reroute_log: list[dict] = []
+ 
++    def ingest_vision_observation(self, zone_id: str, occupancy: int) -> None:
++        """Inject a calibrated CCTV observation before the next simulation tick."""
++        if zone_id not in self.venue.zones:
++            return
++        zone = self.venue.zones[zone_id]
++        zone.occupancy = max(0, min(int(occupancy), zone.capacity))
++
+     def tick(self) -> dict:
+         self.sim.step()
+         densities = {zid: z.density for zid, z in self.venue.zones.items()}
+diff --git a/server/app.py b/server/app.py
+index 94dc0c4..895db2c 100644
+--- a/server/app.py
++++ b/server/app.py
+@@ -1,15 +1,3 @@
+-"""
+-server/app.py
+---------------
+-Deliberately dependency-free (stdlib `http.server` only) so this runs on
+-any judge's laptop with nothing but `python3` - no `pip install` required
+-at demo time, no risk of a venue wifi killing your pip install mid-demo.
+-
+-Runs the DigitalTwin in a background thread (1 tick per TICK_INTERVAL_S
+-wall-clock seconds; each tick advances the simulation by dt_s simulated
+-seconds - see engine/simulation.py DEFAULT_SCENARIO for the timeline).
+-The dashboard polls GET /api/state once a second and redraws.
+-"""
+ from __future__ import annotations
+ 
+ import json
+@@ -18,17 +6,20 @@ import threading
+ import time
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ from pathlib import Path
++from urllib.parse import parse_qs, urlparse
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ sys.path.insert(0, str(ROOT))
+ 
+-from engine import DigitalTwin  # noqa: E402
++from engine import DigitalTwin
++from server.vision import VISION
++
+ 
+ VENUE_PATH = ROOT / "venue" / "venue_graph.json"
+ DASHBOARD_DIR = ROOT / "dashboard"
+-TICK_INTERVAL_S = 1.0     # wall-clock seconds between ticks (demo speed)
+-SIM_DT_S = 10             # simulated seconds advanced per tick
+-FORECAST_HORIZON_TICKS = 6  # -> 60 simulated seconds of look-ahead
++TICK_INTERVAL_S = 1.0
++SIM_DT_S = 10
++FORECAST_HORIZON_TICKS = 6
+ 
+ _lock = threading.Lock()
+ _twin = DigitalTwin(str(VENUE_PATH), dt_s=SIM_DT_S, horizon_ticks=FORECAST_HORIZON_TICKS)
+@@ -40,7 +31,14 @@ def _tick_loop():
+     global _latest_state
+     while _running:
+         with _lock:
++            vision = VISION.status()
++            if vision["running"] and vision["calibrated_occupancy"]:
++                _twin.ingest_vision_observation(
++                    vision["zone_id"],
++                    vision["calibrated_occupancy"],
++                )
+             _latest_state = _twin.tick()
++            _latest_state["vision"] = vision
+         time.sleep(TICK_INTERVAL_S)
+ 
+ 
+@@ -49,15 +47,20 @@ def _reset():
+     with _lock:
+         _twin = DigitalTwin(str(VENUE_PATH), dt_s=SIM_DT_S, horizon_ticks=FORECAST_HORIZON_TICKS)
+         _latest_state = _twin.state()
++        _latest_state["vision"] = VISION.status()
+ 
+ 
+-CONTENT_TYPES = {".html": "text/html", ".css": "text/css", ".js": "application/javascript",
+-                  ".json": "application/json"}
++CONTENT_TYPES = {
++    ".html": "text/html",
++    ".css": "text/css",
++    ".js": "application/javascript",
++    ".json": "application/json",
++}
+ 
+ 
+ class Handler(BaseHTTPRequestHandler):
+     def log_message(self, fmt, *args):
+-        pass  # keep the demo terminal quiet
++        pass
+ 
+     def _send_json(self, payload: dict, code: int = 200):
+         body = json.dumps(payload).encode()
+@@ -79,32 +82,97 @@ class Handler(BaseHTTPRequestHandler):
+         self.end_headers()
+         self.wfile.write(body)
+ 
++    def do_POST(self):
++        parsed = urlparse(self.path)
++        if parsed.path == "/api/vision/upload":
++            query = parse_qs(parsed.query)
++            profile = query.get("profile", ["north_grandstand"])[0]
++            threshold = int(query.get("threshold", ["25"])[0])
++            scale = int(query.get("scale", ["80"])[0])
++
++            length = int(self.headers.get("Content-Length", "0"))
++            if length <= 0 or length > 300 * 1024 * 1024:
++                self._send_json({"ok": False, "error": "Invalid or oversized upload."}, 400)
++                return
++
++            data = self.rfile.read(length)
++            suffix = Path(query.get("filename", ["upload.mp4"])[0]).suffix or ".mp4"
++            VISION.configure(profile, threshold, scale)
++            self._send_json(VISION.start(data, suffix=suffix))
++            return
++
++        if parsed.path == "/api/vision/stop":
++            VISION.stop()
++            self._send_json({"ok": True})
++            return
++
++        self.send_error(404)
++
+     def do_GET(self):
+-        if self.path == "/api/state":
++        parsed = urlparse(self.path)
++
++        if parsed.path == "/api/state":
+             with _lock:
+                 self._send_json(_latest_state)
+             return
+-        if self.path == "/api/reset":
++
++        if parsed.path == "/api/vision/status":
++            self._send_json(VISION.status())
++            return
++
++        if parsed.path == "/api/vision/stream":
++            self._stream_mjpeg()
++            return
++
++        if parsed.path == "/api/reset":
+             _reset()
+             self._send_json({"ok": True})
+             return
+-        if self.path in ("/", "/index.html"):
++
++        if parsed.path in ("/", "/index.html"):
+             self._send_file(DASHBOARD_DIR / "index.html")
+             return
+-        clean = self.path.lstrip("/")
++
++        clean = parsed.path.lstrip("/")
+         candidate = DASHBOARD_DIR / clean
+         if candidate.resolve().parent == DASHBOARD_DIR.resolve() and candidate.exists():
+             self._send_file(candidate)
+             return
++
+         self.send_error(404)
+ 
++    def _stream_mjpeg(self):
++        self.send_response(200)
++        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
++        self.send_header("Cache-Control", "no-cache, private")
++        self.send_header("Pragma", "no-cache")
++        self.end_headers()
++
++        last_frame = None
++        try:
++            while True:
++                frame = VISION.frame()
++                if frame and frame != last_frame:
++                    self.wfile.write(
++                        b"--frame\r\n"
++                        b"Content-Type: image/jpeg\r\n"
++                        b"Cache-Control: no-cache\r\n\r\n" +
++                        frame +
++                        b"\r\n"
++                    )
++                    self.wfile.flush()
++                    last_frame = frame
++                time.sleep(0.04)
++        except (BrokenPipeError, ConnectionResetError):
++            return
++
+ 
+ def main():
+     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+     t = threading.Thread(target=_tick_loop, daemon=True)
+     t.start()
+     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+-    print(f"Digital twin running -> http://localhost:{port}  (Ctrl+C to stop)")
++    print(f"Digital twin running -> http://localhost:{port}")
+     try:
+         server.serve_forever()
+     except KeyboardInterrupt:
+@@ -112,6 +180,7 @@ def main():
+     finally:
+         global _running
+         _running = False
++        VISION.stop()
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/server/vision.py b/server/vision.py
+new file mode 100644
+index 0000000..e1cbcf0
+--- /dev/null
++++ b/server/vision.py
+@@ -0,0 +1,248 @@
++from __future__ import annotations
++
++import threading
++import time
++import tempfile
++from pathlib import Path
++from dataclasses import asdict
++
++try:
++    import cv2
++except Exception:
++    cv2 = None
++
++try:
++    from ultralytics import YOLO
++except Exception:
++    YOLO = None
++
++
++PROFILES = {
++    "north_grandstand": {
++        "zone_id": "grandstand_n",
++        "label": "NORTH GRANDSTAND CAMERA",
++        "recommendation": "DIVERT FLOW → EXIT 2 (MAIN) via PADDOCK CLUB",
++        "direction": "DOWN + RIGHT",
++    },
++    "south_grandstand": {
++        "zone_id": "grandstand_s",
++        "label": "SOUTH GRANDSTAND CAMERA",
++        "recommendation": "DIVERT FLOW → EXIT 2 (MAIN) via PADDOCK CLUB",
++        "direction": "UP + RIGHT",
++    },
++    "main_concourse": {
++        "zone_id": "concourse_1",
++        "label": "MAIN CONCOURSE CAMERA",
++        "recommendation": "DIVERT FLOW → EXIT 1 (NORTH) / EXIT 3 (SOUTH)",
++        "direction": "SPLIT FLOW",
++    },
++}
++
++
++class VisionMonitor:
++    """
++    Lightweight live-video perception service for the hackathon demo.
++
++    It uses YOLO person tracking on a selected video file, renders annotated
++    frames as MJPEG, and exposes a calibrated venue-zone observation that can
++    be injected into the digital twin.
++
++    `persons_per_detection` is intentionally explicit: a CCTV camera samples
++    only part of a physical zone, so raw detections are not equivalent to
++    total venue occupancy without calibration.
++    """
++
++    def __init__(self) -> None:
++        self.lock = threading.Lock()
++        self.running = False
++        self.error = ""
++        self.video_path: Path | None = None
++        self.profile = "north_grandstand"
++        self.threshold = 25
++        self.persons_per_detection = 80
++        self.latest_jpeg: bytes | None = None
++        self.detected_people = 0
++        self.calibrated_occupancy = 0
++        self.fps = 0.0
++        self.frame_index = 0
++        self.alert = False
++        self.recommendation = ""
++        self.direction = ""
++        self.zone_id = "grandstand_n"
++        self._thread: threading.Thread | None = None
++        self._stop = threading.Event()
++        self._model = None
++
++    def configure(self, profile: str, threshold: int, persons_per_detection: int) -> None:
++        if profile not in PROFILES:
++            profile = "north_grandstand"
++        with self.lock:
++            self.profile = profile
++            self.threshold = max(1, int(threshold))
++            self.persons_per_detection = max(1, int(persons_per_detection))
++            cfg = PROFILES[profile]
++            self.zone_id = cfg["zone_id"]
++            self.recommendation = cfg["recommendation"]
++            self.direction = cfg["direction"]
++
++    def start(self, data: bytes, suffix: str = ".mp4") -> dict:
++        if cv2 is None or YOLO is None:
++            msg = (
++                "Vision dependencies are not installed. Run: "
++                "pip install -r requirements-vision.txt"
++            )
++            with self.lock:
++                self.error = msg
++            return {"ok": False, "error": msg}
++
++        self.stop()
++        suffix = suffix if suffix.startswith(".") else f".{suffix}"
++        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
++        tmp.write(data)
++        tmp.close()
++
++        with self.lock:
++            self.video_path = Path(tmp.name)
++            self.error = ""
++            self.frame_index = 0
++            self.detected_people = 0
++            self.calibrated_occupancy = 0
++            self.alert = False
++            self.running = True
++            self._stop.clear()
++
++        self._thread = threading.Thread(target=self._run, daemon=True)
++        self._thread.start()
++        return {"ok": True}
++
++    def stop(self) -> None:
++        self._stop.set()
++        with self.lock:
++            self.running = False
++        if self._thread and self._thread.is_alive():
++            self._thread.join(timeout=1.5)
++
++    def _load_model(self):
++        if self._model is None:
++            self._model = YOLO("yolov8n.pt")
++
++    def _run(self) -> None:
++        cap = None
++        try:
++            self._load_model()
++            with self.lock:
++                path = str(self.video_path)
++            cap = cv2.VideoCapture(path)
++            if not cap.isOpened():
++                raise RuntimeError("Could not open uploaded video.")
++
++            source_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
++            last_t = time.perf_counter()
++
++            while not self._stop.is_set():
++                ok, frame = cap.read()
++                if not ok:
++                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
++                    continue
++
++                result = self._model.track(
++                    frame,
++                    persist=True,
++                    conf=0.25,
++                    classes=[0],
++                    verbose=False,
++                )[0]
++
++                count = int(len(result.boxes)) if result.boxes is not None else 0
++                annotated = result.plot()
++
++                with self.lock:
++                    self.frame_index += 1
++                    self.detected_people = count
++                    self.calibrated_occupancy = count * self.persons_per_detection
++                    self.alert = count >= self.threshold
++                    cfg = PROFILES[self.profile]
++                    self.recommendation = cfg["recommendation"]
++                    self.direction = cfg["direction"]
++
++                    now = time.perf_counter()
++                    elapsed = now - last_t
++                    if elapsed > 0:
++                        self.fps = 0.8 * self.fps + 0.2 * (1.0 / elapsed)
++                    last_t = now
++
++                    label = (
++                        f"{cfg['label']}  |  PEOPLE: {count}  |  "
++                        f"VENUE OCCUPANCY ≈ {self.calibrated_occupancy:,}  | "
++                        f"CALIBRATION ×{self.persons_per_detection}"
++                    )
++                    cv2.rectangle(annotated, (12, 12), (annotated.shape[1] - 12, 56), (10, 16, 21), -1)
++                    cv2.putText(
++                        annotated, label, (22, 42),
++                        cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 212, 255), 2,
++                        cv2.LINE_AA
++                    )
++
++                    if self.alert:
++                        action = f"ALERT → {self.recommendation} | {self.direction}"
++                        cv2.rectangle(
++                            annotated,
++                            (12, annotated.shape[0] - 70),
++                            (annotated.shape[1] - 12, annotated.shape[0] - 12),
++                            (48, 18, 15), -1
++                        )
++                        cv2.putText(
++                            annotated, action[:110],
++                            (22, annotated.shape[0] - 34),
++                            cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 230, 255), 2,
++                            cv2.LINE_AA
++                        )
++                    else:
++                        cv2.putText(
++                            annotated,
++                            f"TRACK CLEAR  |  Trigger at >= {self.threshold} detections",
++                            (22, annotated.shape[0] - 30),
++                            cv2.FONT_HERSHEY_SIMPLEX, 0.56, (0, 230, 120), 2,
++                            cv2.LINE_AA
++                        )
++
++                ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
++                if ok:
++                    with self.lock:
++                        self.latest_jpeg = encoded.tobytes()
++
++                time.sleep(max(0.0, 0.02 if source_fps > 0 else 0.04))
++
++        except Exception as exc:
++            with self.lock:
++                self.error = str(exc)
++                self.running = False
++        finally:
++            if cap is not None:
++                cap.release()
++
++    def status(self) -> dict:
++        with self.lock:
++            return {
++                "running": self.running,
++                "error": self.error,
++                "profile": self.profile,
++                "profile_label": PROFILES[self.profile]["label"],
++                "zone_id": self.zone_id,
++                "detected_people": self.detected_people,
++                "calibrated_occupancy": self.calibrated_occupancy,
++                "threshold": self.threshold,
++                "persons_per_detection": self.persons_per_detection,
++                "fps": round(self.fps, 1),
++                "alert": self.alert,
++                "recommendation": self.recommendation,
++                "direction": self.direction,
++                "frame": self.frame_index,
++            }
++
++    def frame(self) -> bytes | None:
++        with self.lock:
++            return self.latest_jpeg
++
++
++VISION = VisionMonitor()
+diff --git a/requirements-vision.txt b/requirements-vision.txt
+new file mode 100644
+index 0000000..ad858e9
+--- /dev/null
++++ b/requirements-vision.txt
+@@ -0,0 +1,4 @@
++# Optional dependency set for the live CCTV/AI perception panel.
++# The digital-twin dashboard itself remains runnable without these packages.
++opencv-python-headless>=4.9
++ultralytics>=8.3,<9
